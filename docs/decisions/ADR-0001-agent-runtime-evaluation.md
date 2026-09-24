@@ -1,11 +1,12 @@
 # ADR-0001 — Agent runtime ownership: Hermes vs OpenHands
 
-- **Status:** Proposed — **still undecided.** The first protected agent coding
-  attempt returned **`BLOCKED_CONTEXT`** before any model was loaded: the
-  approved 2,048-token context is smaller than an agent SDK's fixed prompt
-  overhead (measured 2,366 tokens). See finding 4 below.
-- **Date:** 2026-09-24 (revised after the FORGE-003 protected smoke test and
-  the first blocked OpenHands attempt)
+- **Status:** Proposed — **still undecided.** Agent coding is blocked by the
+  endpoint's approved **2,048-token context**, not by either runtime: the
+  complete OpenHands initial request measures **5,600 tokens**, and a ForgeOne
+  compact profile still needs **2,446**. Gateway protocol compatibility is
+  **resolved (PASS)**. See finding 4 below.
+- **Date:** 2026-09-24 (revised after the payload-compatibility capture —
+  [report](../reports/FORGE-003-agent-payload-compatibility.md))
 - **Deciders:** Repository owner
 - **Related:** [architecture.md](../architecture.md) §2,
   [FORGE-002 runtime evaluation](../reports/FORGE-002-runtime-evaluation.md),
@@ -67,11 +68,26 @@ The three findings that most affect this decision:
 
 4. **The local endpoint's approved context is too small for OpenHands.**
    Measured with the real tokenizer, before loading weights: the OpenHands
-   system prompt alone is **2,318 tokens** (11,017 chars), and system + task is
-   **2,366 tokens** — against an approved total context of **2,048** and an
-   input budget of **512**. That is **4.6× over the input budget and already
-   past the entire context limit, before any tool schema is added**. `[OBS]`
-   This is a **lower bound**; tool schemas would raise it further.
+   system prompt alone is **2,318 tokens** (11,017 chars), and the **complete**
+   initial request — system + task + three tool schemas — is **5,600 tokens**
+   against an approved total context of **2,048**. `[OBS]`
+   `REAL_TOKENIZER_VERIFIED`
+
+   Tool schemas are the dominant cost (**3,221 tokens** for three tools, more
+   than the entire system prompt). A ForgeOne compact profile
+   (`FORGEONE_COMPACT_V1`) reduces the request to **2,212 tokens** by narrowing
+   the tool set and shortening the prompt **without removing any safeguard** —
+   still `BLOCKED_CONTEXT`. The minimum measured context for that limited
+   workflow is **2,446 tokens** including output reservation.
+
+   **This is a property of the endpoint's budget, not a defect in OpenHands.**
+   No agent runtime was initialised, so this is *not* evidence that OpenHands
+   would fail — only that it cannot run within 2,048 tokens.
+
+   **Gateway compatibility is separately resolved: PASS.** The SDK defaults to
+   `stream=False` and `requires_streaming` is subscription-only, so no streaming
+   adapter is required. `num_retries` defaults to **5**, which conflicts with
+   the no-auto-retry rule and must be forced to `0`.
 
    **This is a property of the endpoint, not a defect in OpenHands.** The
    runtime was never initialised, so this is *not* evidence that OpenHands

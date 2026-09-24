@@ -588,6 +588,34 @@ docstring contract requires.
 production reliability evidence. Nothing here is a completed comparative
 bake-off.**
 
+### 11.8 Payload compatibility follow-up — superseding numbers
+
+The 2,366-token figure above was a **lower bound**; tool schemas were excluded
+because of a harness defect. Full capture is in
+[FORGE-003-agent-payload-compatibility.md](FORGE-003-agent-payload-compatibility.md).
+
+| Measurement | Tokens |
+|---|---|
+| Stock system prompt | 2,318 |
+| **Stock total input (system + task + 3 tool schemas)** | **5,600** |
+| `FORGEONE_COMPACT_V1` total input (2 tools) | **2,212** |
+| Compact, terminal-only diagnostic | 1,303 |
+| **Minimum measured context for the compact workflow** | **2,446** |
+
+**Tool schemas are the dominant cost** (3,221 tokens for three tools — more than
+the entire system prompt).
+
+**Gateway compatibility: PASS.** The SDK defaults to `stream=False` and
+`requires_streaming` is subscription-only, so **no streaming adapter is
+needed**. Three defaults must be overridden — and `num_retries=5` is a genuine
+safety conflict with the no-auto-retry rule; `validate_llm_kwargs()` now fails
+closed unless `api_mode="chat"`, `stream=False`, `num_retries=0`, and explicit
+`timeout` / `max_output_tokens` are supplied.
+
+**The 2K budget does not support the compact coding workflow** (needs 2,446).
+Recommended next context: **4,096**, to be established by a guarded incremental
+measurement — not assumed.
+
 ## 12. Next steps
 
 | # | Step | Gate |
