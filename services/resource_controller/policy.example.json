@@ -22,6 +22,7 @@
 
   "request_timeout_s": 300,
   "cooldown_after_abnormal_exit_s": 120,
+  "telemetry_max_age_s": 5.0,
 
   "max_concurrent_requests": 1,
   "allow_context_escalation": false

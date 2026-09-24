@@ -12,8 +12,9 @@ Fail-closed contract:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .estimator import Estimate, MetadataUnavailable, ModelMetadata, estimate
 from .outcomes import Outcome
@@ -71,15 +72,16 @@ class AdmissionController:
 
         1. dependencies present          -> REJECTED_UNVERIFIED_ESTIMATE
         2. telemetry obtainable          -> REJECTED_UNVERIFIED_ESTIMATE
-        3. concurrency limit             -> REJECTED_CONCURRENCY
-        4. tokens countable              -> REJECTED_UNVERIFIED_ESTIMATE
-        5. input token limit             -> REJECTED_CONTEXT
-        6. output reservation            -> REJECTED_CONTEXT
-        7. total context limit           -> REJECTED_CONTEXT
-        8. retained-cache budget         -> REJECTED_MEMORY
-        9. available-memory floor        -> REJECTED_MEMORY
-       10. estimate vs headroom          -> REJECTED_MEMORY
-       11. otherwise                     -> ADMITTED
+        3. telemetry fresh               -> REJECTED_UNVERIFIED_ESTIMATE
+        4. concurrency limit             -> REJECTED_CONCURRENCY
+        5. tokens countable              -> REJECTED_UNVERIFIED_ESTIMATE
+        6. input token limit             -> REJECTED_CONTEXT
+        7. output reservation            -> REJECTED_CONTEXT
+        8. total context limit           -> REJECTED_CONTEXT
+        9. retained-cache budget         -> REJECTED_MEMORY
+       10. available-memory floor        -> REJECTED_MEMORY
+       11. estimate vs headroom          -> REJECTED_MEMORY
+       12. otherwise                     -> ADMITTED
     """
 
     def __init__(
@@ -88,11 +90,13 @@ class AdmissionController:
         token_counter: Optional[TokenCounter],
         metadata: Optional[ModelMetadata],
         telemetry: Optional[TelemetrySource],
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._policy = policy
         self._counter = token_counter
         self._metadata = metadata
         self._telemetry = telemetry
+        self._clock = clock
 
     # -- helpers ---------------------------------------------------------
     @staticmethod
@@ -134,10 +138,19 @@ class AdmissionController:
                 f"cannot verify request safety: telemetry unavailable ({exc})",
             )
 
+        # 3. telemetry freshness -------------------------------------------
+        now = self._clock()
+        if not snapshot.is_fresh(now, policy.telemetry_max_age_s):
+            return self._reject(
+                Outcome.REJECTED_UNVERIFIED_ESTIMATE,
+                f"cannot verify request safety: telemetry is stale "
+                f"({snapshot.age(now):.1f}s old, limit {policy.telemetry_max_age_s}s)",
+            )
+
         available = snapshot.available_bytes
         budget = policy.budget_bytes(available)
 
-        # 3. concurrency --------------------------------------------------
+        # 4. concurrency --------------------------------------------------
         if request.active_requests >= policy.max_concurrent_requests:
             return self._reject(
                 Outcome.REJECTED_CONCURRENCY,
@@ -147,7 +160,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 4. token counting -----------------------------------------------
+        # 5. token counting -----------------------------------------------
         try:
             input_tokens = self._counter.count_chat_tokens(  # type: ignore[union-attr]
                 request.messages, tools=request.tools
@@ -170,7 +183,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 5. input limit ---------------------------------------------------
+        # 6. input limit ---------------------------------------------------
         if input_tokens > policy.max_input_tokens:
             return self._reject(
                 Outcome.REJECTED_CONTEXT,
@@ -180,7 +193,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 6. output reservation --------------------------------------------
+        # 7. output reservation --------------------------------------------
         if out_tokens > policy.reserved_output_tokens:
             return self._reject(
                 Outcome.REJECTED_CONTEXT,
@@ -191,7 +204,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 7. total context --------------------------------------------------
+        # 8. total context --------------------------------------------------
         total_context = input_tokens + out_tokens
         if total_context > policy.max_context_tokens:
             return self._reject(
@@ -203,7 +216,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 8. retained cache --------------------------------------------------
+        # 9. retained cache --------------------------------------------------
         if request.retained_cache_bytes > policy.max_retained_cache_bytes:
             return self._reject(
                 Outcome.REJECTED_MEMORY,
@@ -214,7 +227,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 9. available-memory floor -------------------------------------------
+        # 10. available-memory floor -------------------------------------------
         if available < policy.min_available_memory_bytes:
             return self._reject(
                 Outcome.REJECTED_MEMORY,
@@ -225,7 +238,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 10. estimate vs headroom ---------------------------------------------
+        # 11. estimate vs headroom ---------------------------------------------
         try:
             est = estimate(
                 context_tokens=total_context,
@@ -254,7 +267,7 @@ class AdmissionController:
                 budget_bytes=budget,
             )
 
-        # 11. admitted -----------------------------------------------------------
+        # 12. admitted -----------------------------------------------------------
         return AdmissionDecision(
             outcome=Outcome.ADMITTED,
             reason=(
@@ -262,6 +275,98 @@ class AdmissionController:
                 f"at context {total_context}"
             ),
             input_tokens=input_tokens,
+            estimate=est,
+            available_bytes=available,
+            budget_bytes=budget,
+        )
+
+    # ------------------------------------------------------------------
+    def admit_startup(self) -> AdmissionDecision:
+        """Admit a **cold model start**, charging residency rather than a prompt.
+
+        A cold start loads the weights and the runtime, so those costs belong to
+        this decision and not to the first request. There is no prompt yet, so
+        no KV cache is charged here — the first request is admitted separately
+        with ``model_resident=True`` and must not be double-charged.
+
+        Fails closed on any missing dependency or stale telemetry, exactly as a
+        request does.
+        """
+        for name, value in (
+            ("policy", self._policy),
+            ("model metadata", self._metadata),
+            ("telemetry", self._telemetry),
+        ):
+            problem = self._missing(name, value)
+            if problem:
+                return self._reject(
+                    Outcome.REJECTED_UNVERIFIED_ESTIMATE,
+                    f"cannot verify startup safety: {problem}",
+                )
+
+        policy = self._policy
+        assert policy is not None
+
+        try:
+            snapshot = self._telemetry.snapshot()  # type: ignore[union-attr]
+        except TelemetryUnavailable as exc:
+            return self._reject(
+                Outcome.REJECTED_UNVERIFIED_ESTIMATE,
+                f"cannot verify startup safety: telemetry unavailable ({exc})",
+            )
+
+        now = self._clock()
+        if not snapshot.is_fresh(now, policy.telemetry_max_age_s):
+            return self._reject(
+                Outcome.REJECTED_UNVERIFIED_ESTIMATE,
+                f"cannot verify startup safety: telemetry is stale "
+                f"({snapshot.age(now):.1f}s old, limit {policy.telemetry_max_age_s}s)",
+            )
+
+        available = snapshot.available_bytes
+        budget = policy.budget_bytes(available)
+
+        if available < policy.min_available_memory_bytes:
+            return self._reject(
+                Outcome.REJECTED_MEMORY,
+                f"available memory {available} bytes is below the floor "
+                f"{policy.min_available_memory_bytes}",
+                available_bytes=available,
+                budget_bytes=budget,
+            )
+
+        try:
+            est = estimate(
+                context_tokens=0,
+                metadata=self._metadata,
+                retained_cache_bytes=0,
+                transient_reserve_bytes=policy.transient_reserve_bytes,
+                model_resident=False,  # cold start: charge weights + overhead
+            )
+        except MetadataUnavailable as exc:
+            return self._reject(
+                Outcome.REJECTED_UNVERIFIED_ESTIMATE,
+                f"cannot verify startup safety: {exc}",
+                available_bytes=available,
+                budget_bytes=budget,
+            )
+
+        if est.total_bytes > budget:
+            return self._reject(
+                Outcome.REJECTED_MEMORY,
+                f"cold-start estimate {est.total_bytes} bytes exceeds headroom "
+                f"{budget} bytes (available {available} - floor "
+                f"{policy.min_available_memory_bytes})",
+                estimate=est,
+                available_bytes=available,
+                budget_bytes=budget,
+            )
+
+        return AdmissionDecision(
+            outcome=Outcome.ADMITTED,
+            reason=(
+                f"cold-start estimate {est.total_bytes} bytes within headroom {budget} bytes"
+            ),
             estimate=est,
             available_bytes=available,
             budget_bytes=budget,

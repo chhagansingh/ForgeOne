@@ -19,6 +19,7 @@ from .admission import AdmissionController, AdmissionDecision, AdmissionRequest
 from .estimator import ModelMetadata
 from .outcomes import Outcome
 from .policy import ResourcePolicy
+from .reservation import ReservationManager
 from .supervisor import ProcessIdentity, ProcessSupervisor
 from .telemetry import TelemetrySource
 from .tokenization import TokenCounter
@@ -62,12 +63,34 @@ class ResourceController:
         self._writer = telemetry_writer
         self._thresholds = watchdog_thresholds
         self._clock = clock
-        self._admission = AdmissionController(policy, token_counter, metadata, telemetry)
+        self._admission = AdmissionController(
+            policy, token_counter, metadata, telemetry, clock=clock
+        )
         self._cooldown_until = 0.0
+        self._reservations = ReservationManager(
+            max_concurrent=(policy.max_concurrent_requests if policy else 1)
+        )
+
+    # -- accessors -------------------------------------------------------
+    @property
+    def policy(self) -> Optional[ResourcePolicy]:
+        return self._policy
+
+    @property
+    def reservations(self) -> ReservationManager:
+        return self._reservations
+
+    @property
+    def telemetry(self) -> Optional[TelemetrySource]:
+        return self._telemetry
 
     # -- admission -------------------------------------------------------
     def admit(self, request: AdmissionRequest) -> AdmissionDecision:
         return self._admission.admit(request)
+
+    def admit_startup(self) -> AdmissionDecision:
+        """Admit a cold model start (charges residency, not a prompt)."""
+        return self._admission.admit_startup()
 
     def admit_and_record(self, request: AdmissionRequest) -> AdmissionDecision:
         decision = self.admit(request)

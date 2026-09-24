@@ -23,6 +23,37 @@ from .controller import CooldownActive, ResourceController, SupervisedStart
 from .estimator import Estimate, MetadataUnavailable, ModelMetadata, estimate
 from .outcomes import Outcome, is_rejection, is_success
 from .policy import PolicyError, ResourcePolicy
+from .ports import (
+    PortProbe,
+    PortStatus,
+    PortUnavailable,
+    RealPortProbe,
+    StaticPortProbe,
+    require_free_port,
+)
+from .protected import (
+    ProtectedResult,
+    ProtectedServer,
+    ProtectedStartup,
+    RecordingForwarder,
+    RequestForwarder,
+    StaticWatchdogReadiness,
+    WatchdogReadiness,
+)
+from .reservation import ConcurrencyExceeded, Reservation, ReservationManager
+from .server_config import (
+    APPROVED_EXECUTABLE_BASENAMES,
+    REQUIRED_SERVER_FLAGS,
+    UNBOUNDED_PATH_FLAGS,
+    CacheBudget,
+    ProtectedServerConfig,
+    ServerConfigError,
+    UnsupportedServingPath,
+    UnsupportedServerVersion,
+    serving_path_is_bounded,
+    supported_flags_from_help,
+    verify_server_support,
+)
 from .supervisor import (
     BindPolicyError,
     DuplicateServiceError,
@@ -60,13 +91,40 @@ from .watchdog import (
 )
 
 __all__ = [
+    "APPROVED_EXECUTABLE_BASENAMES",
     "AdmissionController",
     "AdmissionDecision",
     "AdmissionRequest",
     "BindPolicyError",
+    "CacheBudget",
+    "ConcurrencyExceeded",
     "CooldownActive",
     "DuplicateServiceError",
     "Estimate",
+    "PortProbe",
+    "PortStatus",
+    "PortUnavailable",
+    "ProtectedResult",
+    "ProtectedServer",
+    "ProtectedServerConfig",
+    "ProtectedStartup",
+    "REQUIRED_SERVER_FLAGS",
+    "RealPortProbe",
+    "RecordingForwarder",
+    "RequestForwarder",
+    "Reservation",
+    "ReservationManager",
+    "ServerConfigError",
+    "StaticPortProbe",
+    "StaticWatchdogReadiness",
+    "UNBOUNDED_PATH_FLAGS",
+    "UnsupportedServingPath",
+    "UnsupportedServerVersion",
+    "WatchdogReadiness",
+    "require_free_port",
+    "serving_path_is_bounded",
+    "supported_flags_from_help",
+    "verify_server_support",
     "FakeProcessAdapter",
     "HuggingFaceTokenCounter",
     "JsonlTelemetryWriter",

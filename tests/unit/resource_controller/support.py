@@ -77,17 +77,32 @@ def make_metadata(**overrides) -> ModelMetadata:
 
 
 def healthy_snapshot():
-    """Matches the real host shape: little 'free', plenty reclaimable."""
+    """Matches the real host shape: little 'free', plenty reclaimable.
+
+    Timestamped *now* (monotonic) so it satisfies the telemetry freshness gate.
+    Tests that need a stale snapshot should build one with an explicit old
+    timestamp.
+    """
     return make_snapshot(
         total_gb=24.0, free_gb=0.25, inactive_gb=8.6, speculative_gb=0.85,
-        swap_used_gb=0.0, pageouts=1000, timestamp=0.0,
+        swap_used_gb=0.0, pageouts=1000,
     )
 
 
 def low_memory_snapshot():
     return make_snapshot(
         total_gb=24.0, free_gb=0.10, inactive_gb=1.2, speculative_gb=0.1,
-        swap_used_gb=0.5, pageouts=1000, timestamp=0.0,
+        swap_used_gb=0.5, pageouts=1000,
+    )
+
+
+def stale_snapshot(age_s: float = 600.0):
+    """A snapshot old enough to fail any sane freshness policy."""
+    import time as _t
+
+    return make_snapshot(
+        total_gb=24.0, free_gb=0.25, inactive_gb=8.6, speculative_gb=0.85,
+        pageouts=1000, timestamp=_t.monotonic() - age_s,
     )
 
 

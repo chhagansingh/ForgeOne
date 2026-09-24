@@ -218,20 +218,47 @@ owned-process RSS still aborts when the host is under pressure
 
 **Actual results. Both interpreters. Exit codes as observed.**
 
-| Module | Tests |
-|---|---|
-| `test_policy.py` | 9 |
-| `test_estimator.py` | 12 |
-| `test_admission.py` | 17 |
-| `test_watchdog.py` | 13 |
-| `test_supervisor.py` | 16 |
-| `test_controller.py` | 12 |
-| **Total** | **79** |
+| Module | Tests | Note |
+|---|---|---|
+| `test_policy.py` | 9 | original |
+| `test_estimator.py` | 12 | original |
+| `test_admission.py` | 17 | original |
+| `test_watchdog.py` | 13 | original |
+| `test_supervisor.py` | 16 | original |
+| `test_controller.py` | 12 | original |
+| `test_server_config.py` | 21 | **new** — cache budget, argv, serving paths |
+| `test_ports.py` | 5 | **new** — netstat + bind probing |
+| `test_reservation.py` | 10 | **new** — atomic reservation |
+| `test_protected.py` | 21 | **new** — startup/request gating |
+| `test_tokenizer_real.py` | 20 | **new** — real tokenizer (1 skip) |
+| **Total** | **156** | 79 original preserved, 77 added |
 
 | Interpreter | Command | Result | Exit code |
 |---|---|---|---|
-| Python **3.12.14** (uv-managed) | `python3.12 -m unittest discover -s tests/unit -t .` | `Ran 79 tests … OK` | **0** |
-| Python **3.9.6** (system) | `python3 -m unittest discover -s tests/unit -t .` | `Ran 79 tests … OK` | **0** |
+| Python **3.12.14** + mlx_lm (model venv) | `python -m unittest discover -s tests/unit -t .` | `Ran 156 tests … OK (skipped=1)` | **0** |
+| Python **3.9.6** (system) | `python3 -m unittest discover -s tests/unit -t .` | `Ran 156 tests … OK (skipped=16)` | **0** |
+
+The single skip under the model venv is
+`test_empty_message_list` — the checkpoint's chat template rejects an empty
+conversation, so the test skips rather than asserting a fabricated count. Under
+the system interpreter the 16 additional skips are the real-tokenizer tests,
+which require `mlx_lm` (absent from the system Python).
+
+**Real-tokenizer validation is real, not mocked:** 19 of 20 tests in
+`test_tokenizer_real.py` executed against the actual Qwen3 tokenizer and the
+checkpoint's `chat_template.jinja`. Included is
+`test_naive_concatenation_disagrees_with_the_template`, which proves the
+agreement assertions are not vacuous — a naive counter produces a *different*
+number.
+
+### 6.1 What each layer actually verifies
+
+| Layer | Verified by | Status |
+|---|---|---|
+| Mock-tested controller logic | 79 original tests + reservation/protected/config tests | **REAL** |
+| Static server-configuration validation | `test_server_config.py` (no server started) | **REAL (static)** |
+| Real-tokenizer validation | `test_tokenizer_real.py` vs the checkpoint's tokenizer | **REAL** |
+| Real model inference validation | — | **NOT_TESTED** |
 
 **Required-case coverage** (all 20 from the milestone brief):
 
@@ -270,17 +297,31 @@ available, 0 `mlx` processes.
 
 Recorded honestly rather than glossed over.
 
-| # | Limitation | Impact |
-|---|---|---|
-| 1 | **`HuggingFaceTokenCounter` is not validated against the real tokenizer.** It is unit-tested only via a mock. | Token counting against the actual checkpoint is unverified. Must be validated in the smoke test. |
-| 2 | **`--prompt-cache-bytes` is not automatically injected** into the server argv (design criterion 5, PARTIAL). | The ceiling must be passed manually. The policy field exists; injection does not. |
-| 3 | **No port-availability probe** (`netstat` + `bind()`), design criterion 7. | Ports must be checked manually. `lsof` alone is insufficient — proven during the incident. |
-| 4 | **`transient_reserve_bytes` is a conservative allowance, not a measurement.** | Estimates may be pessimistic or optimistic. The true prefill peak is unknown. |
-| 5 | **`weights_bytes` / `runtime_overhead_bytes` are approximate.** | Recorded in `observed-model-metadata.example.json`; must be replaced with measured values. |
-| 6 | **The watchdog is best-effort.** | It cannot guarantee prevention of an OS-level stall. |
-| 7 | **No integration test against a live model server.** | The controller has never gated a real inference request. |
-| 8 | **Safe context ceiling still unknown** (criterion 10). | Any context size above 8,011 tokens is unproven on this hardware. |
-| 9 | **Not wired into any agent runtime.** | Hermes/OpenHands integration is future work. |
+Every previously open limitation, re-assessed after the hardening pass.
+Status vocabulary: **FIXED** / **PARTIALLY FIXED** / **STILL POSSIBLE** / **NOT_TESTED**.
+
+| # | Limitation | Status | Evidence |
+|---|---|---|---|
+| 1 | `HuggingFaceTokenCounter` unvalidated against a real tokenizer | **FIXED** | `tests/.../test_tokenizer_real.py` — 19 real tests vs the checkpoint tokenizer; `tokenization.py:87–121` |
+| 2 | `--prompt-cache-bytes` not injected into server argv | **FIXED** | `server_config.py:ProtectedServerConfig.build_argv()` always emits it; `test_correct_argv_is_built` |
+| 3 | No port-availability probe | **FIXED** | `ports.py:RealPortProbe` (netstat **and** bind); `test_ports.py` incl. a real bound socket |
+| 4 | `transient_reserve_bytes` is an allowance, not a measurement | **STILL POSSIBLE** | No guarded inference run has been permitted. **The true prefill peak remains unknown.** |
+| 5 | `weights_bytes` / `runtime_overhead_bytes` approximate | **PARTIALLY FIXED** | `observed-model-metadata.example.json` records observed config + measured RSS; exact values still unmeasured |
+| 6 | Watchdog is best-effort | **STILL POSSIBLE** (by nature) | Cannot guarantee prevention of an OS-level stall. Documented in `protected.py` module docstring |
+| 7 | No integration test against a live model server | **NOT_TESTED** | `test_protected.py` uses `RecordingForwarder`; no HTTP, no real server |
+| 8 | Safe context ceiling unknown | **STILL POSSIBLE** | Deliberately not invented. `test_context_boundary_is_measured_not_assumed` measures but asserts no ceiling |
+| 9 | Not wired into any agent runtime | **STILL POSSIBLE** | Hermes/OpenHands integration is future work |
+| 10 | `start_supervised` bypassable (no admission gate) | **FIXED** | `protected.py:ProtectedServer.start()` is the gated path; `test_missing_policy_blocks_startup` |
+| 11 | Concurrency race (caller-supplied `active_requests`) | **FIXED** | `reservation.py:ReservationManager`; `test_races_are_atomic` (8 threads, exactly 1 wins) |
+| 12 | No telemetry freshness check | **FIXED** | `policy.telemetry_max_age_s`; `test_stale_telemetry_blocks_startup` |
+| 13 | No cold-start charging | **FIXED** | `admission.py:admit_startup()`; `test_cold_start_charges_residency` |
+| 14 | No installed-flag support validation | **FIXED** | `server_config.py:verify_server_support`; `test_missing_flag_fails_closed` |
+| 15 | No reservation release on failure paths | **FIXED** | `try/finally` in `protected.py:request()`; `test_reservation_released_after_forward_failure` |
+
+**Two limitations remain genuinely open and both require a guarded inference
+run to close: #4 (transient prefill peak) and #8 (safe context ceiling).**
+Neither can be resolved by any amount of unit testing, and inventing either
+from mock results is exactly what this milestone forbids.
 
 ---
 
@@ -336,14 +377,38 @@ rm -rf /tmp/forge002-fixture /tmp/forge003-hermes /tmp/forge003-openhands
 
 ## 10. Bake-off readiness
 
-**Not ready.** Two prerequisites remain, both requiring a separately approved,
-guarded run:
+**The bake-off is not ready. A tiny inference smoke test is.**
+
+The hardening pass closed the bypasses that made an earlier smoke test unsafe:
+launch and forwarding are now gated, concurrency is reserved atomically, the
+cache ceiling is injected and its enforcement path verified, telemetry must be
+fresh, the port must be proven free, and the watchdog must be live *before* the
+heavy process starts.
+
+Two prerequisites for the **bake-off** remain, both requiring a separately
+approved, guarded run:
 
 1. Measure the transient prefill working set (design criterion 9).
 2. Establish a safe context ceiling under a bounded cache (criterion 10).
 
 Both are cheap to obtain **once the controller is gating the run** — which is
 precisely the point of building it first.
+
+### 10.1 Honest scope of what is proven
+
+| Claim | Proven? |
+|---|---|
+| Admission logic rejects over-budget requests | **Yes** — 156 unit tests |
+| Token counting matches the server's prompt construction | **Yes** — real tokenizer, 19 tests |
+| The controller builds a command line with an enforced cache ceiling | **Yes** — static validation |
+| The controller refuses `--seed` (unbounded) paths | **Yes** — static validation |
+| Startup and forwarding cannot bypass admission | **Yes** — mocked integration |
+| The controller has ever gated a real inference request | **No** — NOT_TESTED |
+| The system cannot OOM | **No** — no such claim is made |
+
+**No production readiness is claimed and no guarantee of OOM prevention is
+offered.** The watchdog is best-effort; the controller narrows risk, it does
+not eliminate it.
 
 **Is a single fixture run meaningful?** A successful fixture run would be a
 **functional smoke test, not evidence of production-level agent reliability.**

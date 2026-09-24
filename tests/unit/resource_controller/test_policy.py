@@ -40,6 +40,7 @@ class PolicyFailClosedTests(unittest.TestCase):
             "transient_reserve_bytes",
             "request_timeout_s",
             "cooldown_after_abnormal_exit_s",
+            "telemetry_max_age_s",
         ]
         full = {
             "max_context_tokens": 8192,
@@ -50,6 +51,7 @@ class PolicyFailClosedTests(unittest.TestCase):
             "transient_reserve_bytes": 1 * GB,
             "request_timeout_s": 60,
             "cooldown_after_abnormal_exit_s": 60,
+            "telemetry_max_age_s": 5.0,
         }
         for field in required:
             with self.subTest(missing=field):

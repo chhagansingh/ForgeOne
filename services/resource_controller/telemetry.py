@@ -38,6 +38,19 @@ class MemorySnapshot:
         """Reclaimable memory: free + inactive + speculative."""
         return self.free_bytes + self.inactive_bytes + self.speculative_bytes
 
+    def age(self, now: float) -> float:
+        """Seconds since this snapshot was taken. Negative clocks clamp to 0."""
+        return max(0.0, now - self.timestamp)
+
+    def is_fresh(self, now: float, max_age_s: float) -> bool:
+        """Freshness gate.
+
+        A stale snapshot describes a host that no longer exists. Admitting on
+        stale telemetry is the same class of error as admitting with no
+        telemetry at all, so both fail closed.
+        """
+        return self.age(now) <= max_age_s
+
     def pageout_rate(self, previous: Optional["MemorySnapshot"]) -> float:
         """Pages per second since ``previous``. 0.0 when there is no baseline."""
         if previous is None:
@@ -136,10 +149,16 @@ def make_snapshot(
     speculative_gb: float = 0.85,
     swap_used_gb: float = 0.0,
     pageouts: int = 0,
-    timestamp: float = 0.0,
+    timestamp: Optional[float] = None,
 ) -> MemorySnapshot:
-    """Convenience constructor for tests and examples."""
+    """Convenience constructor for tests and examples.
+
+    ``timestamp`` defaults to *now* on the monotonic clock, so snapshots are
+    fresh unless a test deliberately ages them.
+    """
     gb = 1024**3
+    if timestamp is None:
+        timestamp = time.monotonic()
     return MemorySnapshot(
         total_bytes=int(total_gb * gb),
         free_bytes=int(free_gb * gb),

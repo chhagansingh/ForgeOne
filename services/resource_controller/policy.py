@@ -27,6 +27,7 @@ _CRITICAL_FIELDS = (
     "transient_reserve_bytes",
     "request_timeout_s",
     "cooldown_after_abnormal_exit_s",
+    "telemetry_max_age_s",
 )
 
 
@@ -69,6 +70,11 @@ class ResourcePolicy:
     # --- timing / lifecycle --------------------------------------------
     request_timeout_s: float
     cooldown_after_abnormal_exit_s: float
+
+    # --- telemetry freshness -------------------------------------------
+    #: A memory snapshot older than this is treated as no snapshot at all.
+    #: Admitting on stale telemetry describes a host that no longer exists.
+    telemetry_max_age_s: float = 5.0
 
     # --- invariants enforced below -------------------------------------
     max_concurrent_requests: int = 1
@@ -122,6 +128,7 @@ class ResourcePolicy:
             cooldown_after_abnormal_exit_s=_require_positive_number(
                 data, "cooldown_after_abnormal_exit_s"
             ),
+            telemetry_max_age_s=_require_positive_number(data, "telemetry_max_age_s"),
             max_concurrent_requests=int(data.get("max_concurrent_requests", 1)),
             allow_context_escalation=bool(data.get("allow_context_escalation", False)),
         )

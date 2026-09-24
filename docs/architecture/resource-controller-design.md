@@ -2,9 +2,11 @@
 
 - **Milestone:** M1 / FORGE-003
 - **Date:** 2026-09-24
-- **Status:** **Implemented** — core controller, admission, supervisor and
-  watchdog with 79 passing unit tests. **Not yet exercised against a real model
-  server** (that is the separately-approved smoke test).
+- **Status:** **Implemented and hardened** — core controller, admission,
+  supervisor, watchdog, protected startup/request boundary, cache-budget
+  enforcement and real-tokenizer validation, with **156 passing unit tests**.
+  **Not yet exercised against a real model server** (that is the
+  separately-approved smoke test).
 - **Trigger:** [FORGE-003 P0 memory incident](../reports/FORGE-003-P0-memory-incident.md)
 - **Scope:** Any ForgeOne workload that allocates significant memory — model
   servers, agent runtimes, media pipelines, ForgeStream experiments
@@ -14,21 +16,59 @@
 | Capability | Design | Implemented | Unit-tested | Exercised against a real server |
 |---|---|---|---|---|
 | Explicit resource policy (fail-closed) | yes | yes | **yes** | no |
-| Admission control (11-step ordered gate) | yes | yes | **yes** | no |
-| Token counting via injected tokenizer | yes | yes | yes (mock only) | **no** |
+| Admission control (12-step ordered gate) | yes | yes | **yes** | no |
+| Telemetry freshness gate | yes | yes | **yes** | no |
+| Token counting via injected tokenizer | yes | yes | **yes — real tokenizer** | no |
 | KV estimation from model metadata | yes | yes | **yes** | no |
 | Process supervisor (ownership, PID reuse) | yes | yes | **yes** | partially (trivial `sleep`) |
 | Loopback bind enforcement | yes | yes | **yes** | yes |
 | Independent watchdog + thresholds | yes | yes | **yes** | no |
 | Unbuffered JSONL telemetry | yes | yes | **yes** | no |
 | Cooldown after abnormal exit | yes | yes | **yes** | no |
+| **Atomic single-request reservation** | added | yes | **yes** | no |
+| **Protected startup gate** | added | yes | **yes** | no |
+| **Protected request gate (no bypass)** | added | yes | **yes** | no |
+| **Cache-budget enforcement adapter** | added | yes | **yes** (static) | no |
+| **Port probe (netstat + bind)** | added | yes | **yes** | yes (real sockets) |
+| **Unbounded serving-path rejection** | added | yes | **yes** | no |
 
 **Code:** `services/resource_controller/` — Python standard library only, no
 third-party dependencies, compatible with Python 3.9+ (verified on 3.9.6 and
 3.12.14).
 
-**Test evidence:** 79 tests, 79 passed, exit code 0 on both interpreters. See
-[FORGE-003 bake-off report §5](../reports/FORGE-003-runtime-bakeoff.md).
+**Test evidence:** 156 tests, exit code 0 on both interpreters. See
+[FORGE-003 bake-off report §6](../reports/FORGE-003-runtime-bakeoff.md).
+
+### 0.2 Hardening pass — what the audit found and closed
+
+A read-only audit of the execution path (`request → tokenization → admission →
+reservation → protected startup → watchdog → forwarding → cleanup`) found ten
+gaps. All ten are now closed in code:
+
+| Gap found | Evidence | Resolution |
+|---|---|---|
+| `start_supervised` not gated by admission | `controller.py:95–125` | `protected.py:ProtectedServer.start()` |
+| No cold-start charge | `controller.py:114` | `admission.py:admit_startup()` |
+| No port availability check | absence | `ports.py:RealPortProbe` (netstat + bind) |
+| Concurrency caller-supplied → race | `admission.py:33,141` | `reservation.py:ReservationManager` |
+| No telemetry freshness check | `telemetry.py:34` | `policy.telemetry_max_age_s` + `admission.py` step 3 |
+| No cache-budget adapter | absence | `server_config.py:CacheBudget` |
+| No request-forwarding path | absence | `protected.py:ProtectedServer.request()` |
+| Tokenizer never validated for real | `tokenization.py:87–121` | `tests/.../test_tokenizer_real.py` |
+| No installed-flag support validation | absence | `server_config.py:verify_server_support` |
+| No reservation release path | absence | `reservation.py` + `try/finally` in `protected.py` |
+
+### 0.3 mlx-lm 0.31.3 serving paths (source-verified, no model loaded)
+
+| Path | Cache byte ceiling enforced? | Evidence |
+|---|---|---|
+| Batched (`_generate`, default) | **Yes, but only if `--prompt-cache-bytes` is set** | `server.py:795–798` |
+| Batched, flag unset (the default) | **No** | default is `None`, `server.py:1877–1881` |
+| `--seed` set → non-batched | **No** | `server.py:685–686`, `_serve_single` at `:922` performs no `trim_to` |
+
+**`--seed` is therefore rejected by `ProtectedServerConfig`** unless unbounded
+serving is explicitly opted into — the controller will not silently build a
+command line whose cache ceiling does not apply.
 
 ### 0.1 Corrections applied during implementation
 
@@ -341,15 +381,23 @@ The controller is not trustworthy until all of these are demonstrated:
 | 2 | Refuses when no estimate can be produced | **PASS** | `test_missing_tokenizer`, `test_missing_model_metadata`, `test_missing_critical_policy`, `test_unavailable_telemetry_fails_closed` |
 | 3 | Aborts on a simulated available-memory breach | **PASS** | `test_critical_memory_pressure_aborts` |
 | 4 | Aborts on a simulated swap breach | **PASS** | `test_swap_threshold_aborts`, `test_rapid_swap_growth_via_pageout_rate_aborts` |
-| 5 | Enforces `--prompt-cache-bytes` as mandatory | **PARTIAL** — the flag mapping is documented (incident report §4.1) and the policy field exists, but automatic injection into the server argv is **not implemented** | — |
+| 5 | Enforces `--prompt-cache-bytes` as mandatory | **PASS** | `server_config.py:build_argv()` always emits it; `test_correct_argv_is_built`, `test_explicit_byte_budget_is_required` |
 | 6 | Produces a complete evidence file for an **aborted** run | **PASS** | `test_aborts_and_persists_telemetry`, `test_jsonl_writer_flushes_to_disk` |
-| 7 | Verifies ports with `netstat` + `bind()` probe | **NOT_IMPLEMENTED** — the supervisor enforces loopback binding from argv, but no port-availability probe exists | — |
+| 7 | Verifies ports with `netstat` + `bind()` probe | **PASS** | `ports.py:RealPortProbe`; `test_occupied_port_detected_by_bind`, `test_netstat_unavailable_fails_closed` |
 | 8 | Records an incident automatically on abort | **PASS** | `test_abort_triggers_cooldown`, watchdog writes an `abort` record |
 | 9 | `prefill_working_set` measured empirically | **NOT_RUN** | Requires a guarded inference run |
 | 10 | Safe context ceiling established under a bounded cache | **NOT_RUN** | Requires a guarded inference run |
+| 11 | Rejects serving paths where the cache ceiling does not apply | **PASS** | `server_config.py:_reject_unbounded_path`; `test_unbounded_serving_path_rejected` |
+| 12 | Startup cannot bypass admission | **PASS** | `protected.py:start()`; `test_missing_policy_blocks_startup` |
+| 13 | Forwarding cannot bypass admission | **PASS** | `protected.py:request()`; `test_rejected_request_is_never_forwarded` |
+| 14 | Concurrency is reserved atomically | **PASS** | `reservation.py`; `test_races_are_atomic` |
+| 15 | Telemetry freshness is enforced | **PASS** | `test_stale_telemetry_blocks_startup` |
+| 16 | Cold start is charged residency | **PASS** | `test_cold_start_charges_residency` |
+| 17 | Installed server flag support is verified | **PASS** | `verify_server_support`; `test_missing_flag_fails_closed` |
 
 **Criteria 9 and 10 remain prerequisites for resuming the FORGE-003 bake-off.**
-Criteria 5 and 7 are known gaps, recorded rather than glossed over.
+They cannot be satisfied by any amount of unit testing — they require a
+guarded, separately-approved inference run.
 
 ## 15. Open questions
 
