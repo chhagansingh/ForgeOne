@@ -5,10 +5,33 @@
 - **Date:** 2026-09-24
 - **Branch:** `feat/forge-003-runtime-bakeoff`
 - **Base commit:** `2c087bec7b36327443564cfa304430506e124748` (`main`, PR #2 merged)
-- **Status:** **PLAN ONLY — awaiting owner approval. Nothing has been installed.**
+- **Status:** **SUPERSEDED IN PART — see the status note below.**
 
 Evidence labels as in FORGE-002: `[DOC]` documented, `[OBS]` observed,
 `[INF]` inferred, `[UNT]` untested.
+
+> ## 📌 STATUS UPDATE (added after execution began)
+>
+> This document was written as a **request for approval**. That approval was
+> granted (A1–A6) and execution proceeded. **The "nothing has been installed"
+> statement in the original gate below is no longer true** and is retained only
+> as the historical record of what was requested.
+>
+> **What actually happened:**
+>
+> | Phase | Outcome |
+> |---|---|
+> | Phase 1 — toolchain | **DONE.** uv 0.12.18 (checksum verified), Python 3.12.14, mlx-lm 0.31.3, mlx 0.32.2, checkpoint `mlx-community/Qwen3-4B-Instruct-2507-4bit` @ `50d4277…`. 2.6 GB, all under Git-ignored `storage/`. No privileges, no system changes. |
+> | Phase 2 — inference preflight | **8/8 PASS**, including genuine structured tool calling. Evidence preserved in the incident report. |
+> | Phase 2 — context/memory verification | **FAILED — P0 host memory incident.** See [`FORGE-003-P0-memory-incident.md`](FORGE-003-P0-memory-incident.md). |
+> | Phase 3 — agent runtimes | **NOT STARTED** |
+> | Phase 4 — bake-off | **NOT STARTED** |
+> | A6 — security action | **DONE.** Verified PID 28474 (`http.server 8080 --bind 0.0.0.0`, serving a client APK) terminated gracefully; port released; client artifact untouched. |
+>
+> **Execution is suspended** pending the
+> [Resource Controller](../architecture/resource-controller-design.md).
+>
+> ### Original approval gate (historical)
 
 > ## ⛔ APPROVAL GATE
 >
