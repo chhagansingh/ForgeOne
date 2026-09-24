@@ -38,6 +38,12 @@ from .protected import (
     RecordingForwarder,
     RequestForwarder,
 )
+from .gateway import (
+    GatewayError,
+    GatewayHTTPServer,
+    ProtectedGateway,
+    make_handler,
+)
 from .transport import (
     HttpRequestForwarder,
     NonLoopbackEndpoint,
@@ -111,8 +117,12 @@ __all__ = [
     "CooldownActive",
     "DuplicateServiceError",
     "Estimate",
+    "GatewayError",
+    "GatewayHTTPServer",
     "HttpRequestForwarder",
     "NonLoopbackEndpoint",
+    "ProtectedGateway",
+    "make_handler",
     "PortProbe",
     "PortStatus",
     "PortUnavailable",

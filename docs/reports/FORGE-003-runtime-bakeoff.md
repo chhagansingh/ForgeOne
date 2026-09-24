@@ -399,7 +399,7 @@ event. All were observed:
 | Watchdog active | separate process, **21 samples**, **0 aborts**, ready before load |
 | Telemetry recorded | `storage/runs/smoke-telemetry.jsonl`, `smoke-admission.jsonl` |
 | Clean process shutdown | owned PIDs `[]`, reservations `0`, port 8082 free |
-| No unresolved memory-pressure event | swap **flat at 4.73 GiB**, page-out **~4/s**, available **rose** to 10.02 GiB |
+| No unresolved memory-pressure event | swap **flat at 4.73 GiB** (all 21 samples); page-outs **+26 cumulative** (~4.3/s average, one 79/s burst at model load, vs a 5,000/s default threshold); available **rose** to 10.02 GiB |
 
 **The Hermes/OpenHands entry gate is now satisfied.** The bake-off itself
 remains **NOT RUN** — that is a separate, separately-approved milestone.
@@ -448,7 +448,147 @@ real measure.
 
 ---
 
-## 11. Next steps
+## 11. First protected agent coding loop — OpenHands
+
+**Result: `BLOCKED_CONTEXT`.** The session did not start and no model was
+loaded. The context-footprint gate caught a genuine incompatibility before any
+resource was consumed.
+
+### 11.1 Entry gate — PASSED
+
+| Requirement | Evidence |
+|---|---|
+| Protected smoke test present with PASS evidence | `FORGE-003-protected-smoke-test.md`; `storage/runs/smoke-result.json` |
+| Cold-start admission | `ADMITTED`, `model_resident_charged: false` |
+| Structured tool-call round trip | `get_test_summary`, valid JSON args, correct continuation |
+| Watchdog active | separate process, 21 samples, 0 aborts |
+| Persistent telemetry | `storage/runs/smoke-telemetry.jsonl` |
+| Clean shutdown | owned PIDs `[]`, reservations `0` |
+| No unresolved memory-pressure event | swap flat 4.73 GiB; page-outs +26 |
+| No ForgeOne model process running | 0 mlx processes |
+| Ports available | 8082 free (netstat + bind probe) |
+
+### 11.2 Smoke-test evidence corrections
+
+Two claims in the smoke-test report were corrected — one of them wrong.
+
+**(A) Page-outs — the report was WRONG.** It stated the rate was "0.0/s
+throughout". The precise accounting:
+
+| Measurement | Value |
+|---|---|
+| Preflight window (12 s) | 0 page-outs → 0.0/s |
+| **Cumulative delta across the session** | **+26 page-outs** |
+| Session elapsed | ~6.0 s |
+| Average rate | **~4.3/s** |
+| Watchdog **sampled** rate (21 samples @ 0.25 s) | 0.0/s in 20 samples, **79.06/s peak in 1** |
+| Abort threshold (design default / configured) | 5,000/s / 20,000/s |
+
+All 26 occurred in one ~0.33 s window during model load. The sampled rate reads
+0.0/s elsewhere because page-outs did not change *within* those windows. Both
+statements are true; reporting only the sampled zero was misleading. The peak
+was ~63× below the design-default threshold.
+
+**(B) Shutdown semantics — clarified.** `CANCELLED` was the **cleanup** label
+for a graceful, intentional post-success shutdown — **not** a cancelled
+inference. Recorded independently: **inference outcome = SUCCESS**, **cleanup
+outcome = CANCELLED**.
+
+### 11.3 Runtime compatibility
+
+| Runtime | Installed | Version | Python | Footprint |
+|---|---|---|---|---|
+| OpenHands SDK | **Yes** (this milestone) | 1.49.5 (`sdk`, `tools`, `workspace`) | ≥ 3.12 | **511 MB** venv |
+| Hermes Agent | **No** | — | — | — |
+| MLX-LM | Yes (prior) | 0.31.3 (mlx 0.32.2) | 3.12.14 | — |
+
+OpenHands installation was **within the previously approved isolated scope
+(A2)**. Source: PyPI. Target: `storage/bakeoff/openhands-venv` (Git-ignored).
+Rollback: `rm -rf storage/bakeoff/openhands-venv`. No global change.
+
+The SDK exposes `base_url` on `LLM` (`llm.py:231`), so it can be pointed at a
+local OpenAI-compatible endpoint.
+
+### 11.4 Protected gateway integration
+
+**Gateway integration: PASS.**
+
+An agent SDK must never be pointed straight at an unprotected model server.
+`services/resource_controller/gateway.py` now provides the only supported
+endpoint, routing every completion through `ProtectedServer.request()`:
+
+```text
+agent SDK → ProtectedGateway → atomic reservation → tokenizer admission
+          → supervised MLX-LM server → response → reservation release
+```
+
+Enforced: **loopback-only bind**; `max_tokens` above the reserved output budget
+is **rejected, never silently clamped**; `stream=True` refused (not implemented
+on the protected path); single-threaded serving to match
+`max_concurrent_requests = 1`; a rejected request returns a structured error and
+is **not forwarded**.
+
+**15 new tests, all passing, no model required** (fake transport + synthetic
+telemetry). Verified: valid request forwarded once; streaming refused; over-budget
+`max_tokens` refused without clamping; `REJECTED_CONTEXT` → 400, `REJECTED_MEMORY`
+→ 503, `REJECTED_CONCURRENCY` → 429, each with **zero** forwarder calls;
+non-loopback bind refused; bad JSON → 400; unknown path → 404.
+
+### 11.5 Exact initial prompt / tool-schema footprint — **the blocker**
+
+Measured with the **real cached Qwen tokenizer and complete chat template**,
+before loading any weights:
+
+| Component | Tokens |
+|---|---|
+| OpenHands system prompt alone (11,017 chars, rendered from the SDK's own default preset) | **2,318** |
+| Task message | 51 |
+| **System + task, no tools** | **2,366** |
+| Tool schemas | *not included — see below* |
+
+| Approved budget | Tokens |
+|---|---|
+| Total active context | **2,048** |
+| Max input per request | **512** |
+| Reserved output | 128 |
+
+**The initial prompt is 4.6× over the input budget and already exceeds the
+entire 2,048-token context — before a single tool schema is added.**
+
+This is a **lower bound**: `Tool.to_openai_tool()` (tool.py:744) returned no
+schemas in my extraction, so the real footprint is *larger* than 2,366. The
+conclusion is unaffected.
+
+Per the instruction — *"If the real initial prompt exceeds this budget, STOP
+BEFORE MODEL STARTUP. Report BLOCKED_CONTEXT."* — the session was **not
+started**. No context was increased, no instruction was truncated, no security
+control was removed, and no false context window was advertised.
+
+### 11.6 Fixture
+
+`/tmp/forge002-fixture` @ `9157d02`, verified intact, **2 files**:
+
+**EXPECTED FAILING BASELINE** — `python3 -m unittest discover -s tests -v`:
+**6 tests, 4 passed, 2 failed, exit code 1**. The defect: `tier_price()` falls
+through to `return 10.00` for `units < 1` instead of raising `ValueError` as its
+docstring contract requires.
+
+### 11.7 Result classification
+
+| Dimension | Status |
+|---|---|
+| Gateway integration | **PASS** — 15 tests, real listener on loopback |
+| OpenHands initialization | **NOT_RUN** — blocked before startup |
+| Agent coding task | **BLOCKED_CONTEXT** |
+| Test execution (fixture) | 6 tests, 4 passed, 2 failed, **exit 1** (EXPECTED FAILING BASELINE) |
+| Hermes local compatibility | **BLOCKED** — not installed, and the same ceiling applies |
+| GUI | **NOT_TESTED** |
+
+**A single successful fixture run would be a functional smoke test, not
+production reliability evidence. Nothing here is a completed comparative
+bake-off.**
+
+## 12. Next steps
 
 | # | Step | Gate |
 |---|---|---|

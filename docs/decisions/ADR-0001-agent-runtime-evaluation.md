@@ -1,7 +1,11 @@
 # ADR-0001 — Agent runtime ownership: Hermes vs OpenHands
 
-- **Status:** Proposed — **still undecided**
-- **Date:** 2026-09-24 (revised after FORGE-002 static evaluation)
+- **Status:** Proposed — **still undecided.** The first protected agent coding
+  attempt returned **`BLOCKED_CONTEXT`** before any model was loaded: the
+  approved 2,048-token context is smaller than an agent SDK's fixed prompt
+  overhead (measured 2,366 tokens). See finding 4 below.
+- **Date:** 2026-09-24 (revised after the FORGE-003 protected smoke test and
+  the first blocked OpenHands attempt)
 - **Deciders:** Repository owner
 - **Related:** [architecture.md](../architecture.md) §2,
   [FORGE-002 runtime evaluation](../reports/FORGE-002-runtime-evaluation.md),
@@ -61,6 +65,18 @@ The three findings that most affect this decision:
    September 2026 decomposition, with a temporary shim already past its removal
    date. Any ForgeOne adapter must target CLI/ACP/MCP surfaces only. `[OBS]`
 
+4. **The local endpoint's approved context is too small for OpenHands.**
+   Measured with the real tokenizer, before loading weights: the OpenHands
+   system prompt alone is **2,318 tokens** (11,017 chars), and system + task is
+   **2,366 tokens** — against an approved total context of **2,048** and an
+   input budget of **512**. That is **4.6× over the input budget and already
+   past the entire context limit, before any tool schema is added**. `[OBS]`
+   This is a **lower bound**; tool schemas would raise it further.
+
+   **This is a property of the endpoint, not a defect in OpenHands.** The
+   runtime was never initialised, so this is *not* evidence that OpenHands
+   would fail — only that it cannot run within the currently approved budget.
+
 Additional risk signals: Agent Canvas's npm manifest declares
 `engines.node >= 24` while its README says `22.12.x`; `OpenHands-CLI` pins
 `requires-python == 3.12.*`; Hermes presents a very broad surface (TUI + web +
@@ -97,7 +113,23 @@ concurrently.
 
 ## What is required to decide
 
-Both items need one owner approval:
+**A context budget large enough to run an agent runtime at all.** Finding 4 is
+now the binding constraint: no agent runtime can be evaluated while the
+approved context is 2,048 tokens. The local endpoint itself is proven sound
+(protected smoke test PASS, real tool calling, watchdog clean) — it is simply
+configured too small for an agent SDK's fixed prompt overhead.
+
+Required, in order:
+
+1. **A larger approved context**, established by a *guarded* measurement under
+   the Resource Controller — not by assuming 8K/16K/32K works. The prior
+   incident occurred during a 32,611-token prefill, so the safe ceiling is
+   genuinely unknown and must be measured incrementally with the watchdog
+   active.
+2. **Then** the runtime bake-off, with the same endpoint, model, fixture and
+   acceptance criteria for both candidates.
+
+Separately, both items below need one owner approval:
 
 1. **A scoped toolchain install** — `uv` plus Python 3.11 and/or 3.13. This
    alone makes Hermes and the OpenHands SDK reachable. Node ≥24 is needed

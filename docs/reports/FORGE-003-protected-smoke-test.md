@@ -158,7 +158,7 @@ before admission — it was not assumed to fit.
 | `request_ok` (req 1) | **ADMITTED** | executed |
 | `admission` (req 2) | **ADMITTED** | estimated peak 1,665,318,912 B within headroom 4,059,054,080 B |
 | `request_ok` (req 2) | **ADMITTED** | executed |
-| `stopped` | **CANCELLED** | graceful |
+| `stopped` | **CANCELLED** | graceful shutdown label — see §9; this is a *cleanup* outcome, not a cancelled inference |
 
 Both requests were admitted **before** forwarding; the forwarder is only
 reachable through `ProtectedServer.request()`. Reservations were held for the
@@ -208,20 +208,47 @@ is complete: tool call → local execution → tool result → final answer.**
 |---|---|---|---|
 | Available memory | 9.68 GiB | **7.52 GiB** | **10.02 GiB** |
 | Swap used | 4.73 GiB | **4.73 GiB** | **4.73 GiB** |
-| Page-outs | 98,930 | — | 98,956 |
+| Page-outs (cumulative) | 98,930 | — | 98,956 |
+
+### 8.1 Page-out accounting — corrected
+
+An earlier revision of this report stated the page-out rate was "0.0/s
+throughout". **That was wrong.** The precise accounting, from the persisted
+telemetry and the before/after snapshots:
+
+| Measurement | Value |
+|---|---|
+| Preflight window (12 s, before any load) | 0 page-outs → **0.0/s** |
+| **Total cumulative delta across the session** | **+26 page-outs** |
+| Session elapsed between snapshots | ~6.0 s |
+| **Average rate over the session** | **~4.3/s** |
+| Watchdog **sampled** rate, 21 samples at 0.25 s | 0.0/s in 20 samples, **79.06/s peak in 1 sample** |
+| Design-default abort threshold | 5,000/s |
+| Configured abort threshold | 20,000/s |
+| Abort records | **0** |
+
+All 26 page-outs occurred in a **single ~0.33 s window** at t≈2.38 s — during
+model load — giving a momentary 79.06/s. The sampled rate reads 0.0/s in every
+other sample because page-outs did not change *within* those 0.25 s windows.
+Both statements are true simultaneously; neither alone is the whole picture.
+
+**Verdict: well within limits, but not zero.** The peak was ~63× below the
+design-default abort threshold and ~253× below the configured one.
+
+### 8.2 Other observations
 
 - **Available memory rose** across the session (9.68 → 10.02 GiB) and never
   approached the 2 GiB watchdog abort floor.
-- **Swap did not move at all** — 4.73 GiB before, during and after.
-- Page-outs increased by **26 over the session (~4/s)** — negligible, versus the
-  5,000/s watchdog abort threshold and the 20,000/s configured limit.
+- **Swap did not move at all** — 4.73 GiB before, during and after, in all
+  21 samples.
 - **No abort record was written.** No memory-pressure event occurred.
 
 ## 9. Process cleanup and reservation release
 
 | Check | Result |
 |---|---|
-| Stop outcome | `CANCELLED` (graceful) |
+| **Inference outcome** (independent) | **SUCCESS** — both requests `ADMITTED` and executed; final answer produced |
+| **Cleanup outcome** (independent) | `CANCELLED` — the graceful-shutdown label, **not** a cancelled inference |
 | Owned PIDs after stop | **`[]`** — none remain |
 | Reservations held | **0** — released on every exit path |
 | `mlx_lm.server` processes | **0** |
