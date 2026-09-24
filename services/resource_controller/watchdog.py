@@ -32,6 +32,135 @@ from typing import Callable, List, Optional, Sequence
 from .telemetry import MemorySnapshot, TelemetrySource, TelemetryUnavailable
 
 
+class WatchdogReadiness(abc.ABC):
+    """Reports whether supervision is live *before* a heavy process starts."""
+
+    @abc.abstractmethod
+    def is_ready(self) -> bool:
+        raise NotImplementedError
+
+
+class StaticWatchdogReadiness(WatchdogReadiness):
+    """Scripted readiness for tests."""
+
+    def __init__(self, ready: bool = True) -> None:
+        self._ready = ready
+
+    def set_ready(self, ready: bool) -> None:
+        self._ready = ready
+
+    def is_ready(self) -> bool:
+        return self._ready
+
+
+def count_telemetry_samples(path, event: str = "sample") -> int:
+    """Count records of a given event in a JSONL telemetry file. 0 if absent."""
+    p = Path(path)
+    if not p.is_file():
+        return 0
+    n = 0
+    try:
+        with p.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    if json.loads(line).get("event") == event:
+                        n += 1
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return 0
+    return n
+
+
+class ProcessWatchdogReadiness(WatchdogReadiness):
+    """Real readiness: the watchdog process is alive AND telemetry is flowing.
+
+    A process that has started but written nothing is not supervision -- it is
+    an unverified assumption. Both conditions must hold.
+    """
+
+    def __init__(self, process, telemetry_path, *, min_samples: int = 1) -> None:
+        self._process = process
+        self._path = telemetry_path
+        self._min = min_samples
+
+    @property
+    def alive(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    def samples(self) -> int:
+        return count_telemetry_samples(self._path)
+
+    def is_ready(self) -> bool:
+        return self.alive and self.samples() >= self._min
+
+    def detail(self) -> str:
+        return (
+            f"watchdog alive={self.alive} "
+            f"samples={self.samples()} (need >= {self._min})"
+        )
+
+
+def launch_watchdog_process(
+    *,
+    telemetry_path,
+    min_available_bytes: int,
+    max_swap_used_bytes: int,
+    max_pageout_rate: float,
+    sample_interval_s: float = 0.25,
+    max_wall_clock_s=None,
+    owned_pid=None,
+    python_executable=None,
+    module: str = "services.resource_controller.watchdog",
+    cwd=None,
+    extra_env=None,
+):
+    """Start the watchdog as its own process. Returns ``(Popen, readiness)``.
+
+    The process is launched with ``-u`` so its stdout is unbuffered, and it
+    writes telemetry itself with an explicit flush per sample.
+    """
+    import os
+    import subprocess as _sp
+    import sys as _sys
+
+    exe = python_executable or _sys.executable
+    argv = [
+        exe,
+        "-u",
+        "-m",
+        module,
+        "--telemetry",
+        str(telemetry_path),
+        "--min-available-gb",
+        str(min_available_bytes / (1024**3)),
+        "--max-swap-gb",
+        str(max_swap_used_bytes / (1024**3)),
+        "--max-pageout-rate",
+        str(max_pageout_rate),
+        "--sample-interval-s",
+        str(sample_interval_s),
+    ]
+    if max_wall_clock_s is not None:
+        argv += ["--max-wall-clock-s", str(max_wall_clock_s)]
+    if owned_pid is not None:
+        argv += ["--owned-pid", str(owned_pid)]
+
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+
+    proc = _sp.Popen(
+        argv, cwd=cwd, env=env,
+        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+        start_new_session=True,
+    )
+    return proc, ProcessWatchdogReadiness(proc, telemetry_path)
+
+
 @dataclass(frozen=True)
 class WatchdogThresholds:
     min_available_bytes: int

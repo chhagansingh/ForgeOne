@@ -50,26 +50,23 @@ from .outcomes import Outcome
 from .ports import PortProbe, PortStatus, PortUnavailable, require_free_port
 from .server_config import ProtectedServerConfig
 from .supervisor import ProcessIdentity
-from .watchdog import TelemetryWriter
+from .watchdog import (
+    ProcessWatchdogReadiness,
+    StaticWatchdogReadiness,
+    TelemetryWriter,
+    WatchdogReadiness,
+)
 
-
-class WatchdogReadiness(abc.ABC):
-    """Reports whether supervision is live *before* a heavy process starts."""
-
-    @abc.abstractmethod
-    def is_ready(self) -> bool:
-        raise NotImplementedError
-
-
-class StaticWatchdogReadiness(WatchdogReadiness):
-    def __init__(self, ready: bool = True) -> None:
-        self._ready = ready
-
-    def set_ready(self, ready: bool) -> None:
-        self._ready = ready
-
-    def is_ready(self) -> bool:
-        return self._ready
+__all__ = [
+    "ProcessWatchdogReadiness",
+    "ProtectedResult",
+    "ProtectedServer",
+    "ProtectedStartup",
+    "RecordingForwarder",
+    "RequestForwarder",
+    "StaticWatchdogReadiness",
+    "WatchdogReadiness",
+]
 
 
 class RequestForwarder(abc.ABC):

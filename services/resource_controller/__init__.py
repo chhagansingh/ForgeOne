@@ -37,8 +37,18 @@ from .protected import (
     ProtectedStartup,
     RecordingForwarder,
     RequestForwarder,
+)
+from .transport import (
+    HttpRequestForwarder,
+    NonLoopbackEndpoint,
+    TransportError,
+)
+from .watchdog import (
+    ProcessWatchdogReadiness,
     StaticWatchdogReadiness,
     WatchdogReadiness,
+    count_telemetry_samples,
+    launch_watchdog_process,
 )
 from .reservation import ConcurrencyExceeded, Reservation, ReservationManager
 from .server_config import (
@@ -101,9 +111,15 @@ __all__ = [
     "CooldownActive",
     "DuplicateServiceError",
     "Estimate",
+    "HttpRequestForwarder",
+    "NonLoopbackEndpoint",
     "PortProbe",
     "PortStatus",
     "PortUnavailable",
+    "ProcessWatchdogReadiness",
+    "TransportError",
+    "count_telemetry_samples",
+    "launch_watchdog_process",
     "ProtectedResult",
     "ProtectedServer",
     "ProtectedServerConfig",

@@ -21,13 +21,15 @@
 |---|---|---|
 | 1 | Install toolchain (uv, Python 3.12, MLX-LM, checkpoint) | **DONE** |
 | 2 | Inference preflight (8 checks incl. tool calling) | **PASS 8/8** |
-| 2 | Context/memory verification | **FAILED — P0 host memory incident** |
+| 2 | Context/memory verification | **FAILED — P0 host memory incident** (unprotected) |
+| 2b | **Protected inference smoke test** | **PASS** — [report](FORGE-003-protected-smoke-test.md) |
 | 3 | Install agent runtimes (Hermes, OpenHands) | **NOT STARTED** |
 | 4 | Identical practical bake-off on the fixture | **NOT STARTED** |
 | 5 | Measurement and review | **NOT STARTED** |
 | 6 | Architecture decision (ADR-0001) | **BLOCKED** |
 | 7 | Delivery | **PARTIAL** (this report) |
-| — | Resource Controller implementation | **DONE** (79 tests passing) |
+| — | Resource Controller implementation + hardening | **DONE** (156 tests passing) |
+| — | **Bake-off entry gate** | **SATISFIED** — see §10.2 |
 
 ---
 
@@ -255,10 +257,12 @@ number.
 
 | Layer | Verified by | Status |
 |---|---|---|
-| Mock-tested controller logic | 79 original tests + reservation/protected/config tests | **REAL** |
+| Mock-tested controller logic | 156 tests incl. reservation/protected/config | **REAL** |
 | Static server-configuration validation | `test_server_config.py` (no server started) | **REAL (static)** |
 | Real-tokenizer validation | `test_tokenizer_real.py` vs the checkpoint's tokenizer | **REAL** |
-| Real model inference validation | — | **NOT_TESTED** |
+| **Real protected inference** | [protected smoke test](FORGE-003-protected-smoke-test.md) — 1 session, 2 requests | **PASS** |
+| Real agent-runtime execution | — | **NOT_TESTED** |
+| GUI validation | — | **NOT_TESTED** |
 
 **Required-case coverage** (all 20 from the milestone brief):
 
@@ -308,7 +312,7 @@ Status vocabulary: **FIXED** / **PARTIALLY FIXED** / **STILL POSSIBLE** / **NOT_
 | 4 | `transient_reserve_bytes` is an allowance, not a measurement | **STILL POSSIBLE** | No guarded inference run has been permitted. **The true prefill peak remains unknown.** |
 | 5 | `weights_bytes` / `runtime_overhead_bytes` approximate | **PARTIALLY FIXED** | `observed-model-metadata.example.json` records observed config + measured RSS; exact values still unmeasured |
 | 6 | Watchdog is best-effort | **STILL POSSIBLE** (by nature) | Cannot guarantee prevention of an OS-level stall. Documented in `protected.py` module docstring |
-| 7 | No integration test against a live model server | **NOT_TESTED** | `test_protected.py` uses `RecordingForwarder`; no HTTP, no real server |
+| 7 | No integration test against a live model server | **FIXED** | `transport.py:HttpRequestForwarder` (loopback-only, stdlib) + [protected smoke test](FORGE-003-protected-smoke-test.md) — 2 real requests gated end to end. Unit tests still use a double, correctly. |
 | 8 | Safe context ceiling unknown | **STILL POSSIBLE** | Deliberately not invented. `test_context_boundary_is_measured_not_assumed` measures but asserts no ceiling |
 | 9 | Not wired into any agent runtime | **STILL POSSIBLE** | Hermes/OpenHands integration is future work |
 | 10 | `start_supervised` bypassable (no admission gate) | **FIXED** | `protected.py:ProtectedServer.start()` is the gated path; `test_missing_policy_blocks_startup` |
@@ -377,7 +381,28 @@ rm -rf /tmp/forge002-fixture /tmp/forge003-hermes /tmp/forge003-openhands
 
 ## 10. Bake-off readiness
 
-**The bake-off is not ready. A tiny inference smoke test is.**
+**The protected smoke test has now been executed and PASSED.**
+See [FORGE-003-protected-smoke-test.md](FORGE-003-protected-smoke-test.md).
+
+### 10.1 Bake-off entry gate — SATISFIED
+
+The gate required a completed protected smoke test with controlled startup,
+successful admission, a real structured tool-call round trip, an active
+watchdog, recorded telemetry, clean shutdown and no unresolved memory-pressure
+event. All were observed:
+
+| Gate requirement | Evidence |
+|---|---|
+| Controlled model startup | cold start **ADMITTED**, argv carries explicit cache budgets, loopback only |
+| Successful admission | 2 requests **ADMITTED** before forwarding |
+| Structured tool-call round trip | `get_test_summary` with valid JSON args → local execution → result → final answer |
+| Watchdog active | separate process, **21 samples**, **0 aborts**, ready before load |
+| Telemetry recorded | `storage/runs/smoke-telemetry.jsonl`, `smoke-admission.jsonl` |
+| Clean process shutdown | owned PIDs `[]`, reservations `0`, port 8082 free |
+| No unresolved memory-pressure event | swap **flat at 4.73 GiB**, page-out **~4/s**, available **rose** to 10.02 GiB |
+
+**The Hermes/OpenHands entry gate is now satisfied.** The bake-off itself
+remains **NOT RUN** — that is a separate, separately-approved milestone.
 
 The hardening pass closed the bypasses that made an earlier smoke test unsafe:
 launch and forwarding are now gated, concurrency is reserved atomically, the
@@ -394,7 +419,7 @@ approved, guarded run:
 Both are cheap to obtain **once the controller is gating the run** — which is
 precisely the point of building it first.
 
-### 10.1 Honest scope of what is proven
+### 10.2 Honest scope of what is proven
 
 | Claim | Proven? |
 |---|---|
@@ -402,8 +427,13 @@ precisely the point of building it first.
 | Token counting matches the server's prompt construction | **Yes** — real tokenizer, 19 tests |
 | The controller builds a command line with an enforced cache ceiling | **Yes** — static validation |
 | The controller refuses `--seed` (unbounded) paths | **Yes** — static validation |
-| Startup and forwarding cannot bypass admission | **Yes** — mocked integration |
-| The controller has ever gated a real inference request | **No** — NOT_TESTED |
+| Startup and forwarding cannot bypass admission | **Yes** — unit tests + real session |
+| The controller has gated a real inference request | **Yes** — 2 requests, protected smoke test |
+| The protected path works under the observed conditions | **Yes** — smoke test PASS |
+| A safe maximum context | **No** — UNKNOWN; only 2048 was exercised |
+| 8K/16K/32K/64K compatibility | **No** — nothing here is evidence for any of them |
+| General peak prefill memory requirement | **No** — still unmeasured |
+| Hermes or OpenHands compatibility | **No** — no agent runtime has been run |
 | The system cannot OOM | **No** — no such claim is made |
 
 **No production readiness is claimed and no guarantee of OOM prevention is
