@@ -78,15 +78,19 @@ storage/                   EXCLUDED FROM GIT — models, cache, runs, artifacts
 
 - [`AGENTS.md`](AGENTS.md) — rules for AI agents working here.
 - [`docs/architecture.md`](docs/architecture.md) — architecture and workflow contracts.
+- [`docs/architecture/prompt-intelligence-design.md`](docs/architecture/prompt-intelligence-design.md) — prompt record schema and composition order.
 - [`docs/decisions/`](docs/decisions/) — ADRs, starting with the agent-runtime evaluation.
+- [`docs/research/prompts-chat-integration.md`](docs/research/prompts-chat-integration.md) — prompt library audit and reuse strategy.
 - [`specs/000-foundation/spec.md`](specs/000-foundation/spec.md) — foundation requirements.
+- [`specs/001-agent-runtime/spec.md`](specs/001-agent-runtime/spec.md) — agent runtime selection requirements.
 - [`docs/reports/`](docs/reports/) — milestone validation reports.
 
 ## Development environment
 
-Not yet provisioned. M0 intentionally installs nothing. The verified local
-baseline is recorded in
-[`docs/reports/FORGE-001-M0-validation-report.md`](docs/reports/FORGE-001-M0-validation-report.md).
+Not yet provisioned. M0 intentionally installs nothing, and M1 installs nothing
+without explicit owner approval. The verified local baselines are recorded in
+[`docs/reports/FORGE-001-M0-validation-report.md`](docs/reports/FORGE-001-M0-validation-report.md)
+and [`docs/reports/FORGE-002-runtime-evaluation.md`](docs/reports/FORGE-002-runtime-evaluation.md).
 
 ## License
 
