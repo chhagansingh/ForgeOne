@@ -29,7 +29,7 @@ requires a separate, scoped, owner-approved task.
 | REQ-001-03 | Cover all fourteen evaluation dimensions defined in the milestone brief. | **PASS** |
 | REQ-001-04 | Record the exact install requirements (packages, download size, filesystem impact, privileges) **before** any substantial installation. | **PASS** |
 | REQ-001-05 | Build a small, disposable, independently owned test project — never a client repository. | **PASS** |
-| REQ-001-06 | Execute the deterministic part of the bake-off and record the real result. | **PASS** — 6 tests, 2 failures, exit 1 |
+| REQ-001-06 | Execute the deterministic part of the bake-off and record the real result. | **PASS** (execution and honest recording); the suite itself **FAILED** — 6 tests, 2 failures, exit 1 |
 | REQ-001-07 | Execute the agent-driven part of the bake-off on both runtimes with the same model and fixture. | **BLOCKED** |
 | REQ-001-08 | Never fabricate a benchmark or report an unexecuted test as passing. | **PASS** |
 | REQ-001-09 | Never run Hermes and OpenHands concurrently against the same workspace. | **PASS** (neither installed) |

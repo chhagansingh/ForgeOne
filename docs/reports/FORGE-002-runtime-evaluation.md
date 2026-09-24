@@ -231,9 +231,20 @@ FAILED (failures=2)
 BASELINE_EXIT=1
 ```
 
-**Result: PASS** — the fixture is valid: 6 tests, 4 pass, 2 fail, exit code 1.
-The failure is deterministic and encodes the documented contract. Full fixture
-source is in Appendix A.
+**Result: baseline failure detection `PASS` — the test suite itself `FAILED`.**
+
+These are two different things and must not be conflated:
+
+| Statement | Status |
+|---|---|
+| The fixture correctly *detects* the deliberate defect (failure detection works) | **PASS** |
+| The test suite result | **FAILED** — 6 tests run, 4 passed, **2 failed**, `FAILED (failures=2)`, `BASELINE_EXIT=1` |
+
+The suite is reported as **failing**, not as an overall pass. For a
+deliberately broken fixture this is the expected and desired baseline state: it
+proves the harness actually detects the defect rather than silently passing.
+The failure is deterministic and encodes the documented contract in
+`src/pricing.py`. Full fixture source is in Appendix A.
 
 ### 5.2 What was NOT executed, and why
 
