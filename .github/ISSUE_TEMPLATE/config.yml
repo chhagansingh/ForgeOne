@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: ForgeOne documentation
+    url: https://github.com/chhagansingh/ForgeOne/blob/main/README.md
+    about: Project overview, milestone table and current status.
+  - name: Agent working agreement
+    url: https://github.com/chhagansingh/ForgeOne/blob/main/AGENTS.md
+    about: Rules any AI coding agent must follow in this repository.
+  - name: Architecture and ADRs
+    url: https://github.com/chhagansingh/ForgeOne/blob/main/docs/architecture.md
+    about: Intended architecture, workflow contracts and decision records.

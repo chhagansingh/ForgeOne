@@ -1,0 +1,146 @@
+# ForgeOne — Git ignore rules
+#
+# Policy (blueprint section 3): model weights, caches, run outputs, credentials
+# and generated artifacts stay OUT of Git. They live under `storage/`, which is
+# excluded below. Prefer committing model *manifests* and upstream references
+# over duplicating checkpoints.
+
+# ---------------------------------------------------------------------------
+# Local storage: models, cache, runs, artifacts, worktrees, logs, benchmarks
+# ---------------------------------------------------------------------------
+storage/
+
+# ---------------------------------------------------------------------------
+# Secrets and credentials — never commit these
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+*.keystore
+*.jks
+credentials.json
+secrets.json
+service-account*.json
+.netrc
+# Prefer the OS Keychain or environment variables over secret files.
+
+# ---------------------------------------------------------------------------
+# Model weights / checkpoints (use manifests + upstream Hugging Face refs)
+# ---------------------------------------------------------------------------
+*.gguf
+*.ggml
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.tflite
+*.mlmodel
+*.mlpackage
+# NOTE: `*.bin` is deliberately NOT ignored globally — it collides with
+# legitimate tooling artifacts. Keep weights under `storage/models/`.
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit*.xml
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Node / web
+# ---------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+dist/
+build/
+.next/
+.nuxt/
+out/
+.turbo/
+.parcel-cache/
+coverage/
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# Swift / Xcode (M6 native iOS adapter)
+# ---------------------------------------------------------------------------
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+.build/
+.swiftpm/
+Pods/
+*.ipa
+
+# ---------------------------------------------------------------------------
+# Android / Gradle (M7 Android adapter)
+# ---------------------------------------------------------------------------
+.gradle/
+local.properties
+*.apk
+*.aab
+*.dex
+captures/
+.cxx/
+
+# ---------------------------------------------------------------------------
+# Logs, caches, temporary files
+# ---------------------------------------------------------------------------
+*.log
+logs/
+.cache/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Generated media (store under storage/ or attach as CI artifacts)
+# ---------------------------------------------------------------------------
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+# NOTE: still images are NOT ignored globally — validation screenshots may be
+# committed deliberately as reviewable evidence. Review before staging.
+
+# ---------------------------------------------------------------------------
+# macOS / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.idea/
+.vscode/
+*.code-workspace
+.history/
