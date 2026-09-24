@@ -1,0 +1,369 @@
+# FORGE-003 — Runtime Bake-off: Progress Report
+
+- **Milestone:** M1 — Agent bake-off
+- **Date:** 2026-09-24
+- **Branch:** `feat/forge-003-runtime-bakeoff`
+- **Bake-off status:** **NOT RUN.** No agent runtime has been installed or
+  executed. This is an honest progress report, not a results report.
+
+> **Read this first.** The bake-off did not happen, and this document does not
+> pretend otherwise. A host memory incident interrupted the milestone
+> ([incident report](FORGE-003-P0-memory-incident.md)), and the remaining work
+> was redirected into building the
+> [Resource Controller](../architecture/resource-controller-design.md) that
+> prevents a recurrence. Nothing here is a benchmark result.
+
+---
+
+## 1. Phase status
+
+| Phase | Description | Status |
+|---|---|---|
+| 1 | Install toolchain (uv, Python 3.12, MLX-LM, checkpoint) | **DONE** |
+| 2 | Inference preflight (8 checks incl. tool calling) | **PASS 8/8** |
+| 2 | Context/memory verification | **FAILED — P0 host memory incident** |
+| 3 | Install agent runtimes (Hermes, OpenHands) | **NOT STARTED** |
+| 4 | Identical practical bake-off on the fixture | **NOT STARTED** |
+| 5 | Measurement and review | **NOT STARTED** |
+| 6 | Architecture decision (ADR-0001) | **BLOCKED** |
+| 7 | Delivery | **PARTIAL** (this report) |
+| — | Resource Controller implementation | **DONE** (79 tests passing) |
+
+---
+
+## 2. What was actually installed
+
+All under Git-ignored `storage/`. No privileges, no system changes, no `sudo`,
+no Homebrew, no remote install scripts.
+
+| Artefact | Version | Location | Notes |
+|---|---|---|---|
+| `uv` | 0.12.18 | `storage/tools/uv/` | **SHA256 verified** against the official `.sha256` |
+| Python | 3.12.14 | `storage/tools/python/` | uv-managed; system 3.9.6 untouched |
+| `mlx-lm` | 0.31.3 | `storage/bakeoff/model-venv/` | plus `mlx` 0.32.2, `transformers` 5.17.0 |
+| Checkpoint | `mlx-community/Qwen3-4B-Instruct-2507-4bit` @ `50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b` | `storage/cache/huggingface/` | 2.11 GB on disk |
+
+**Total footprint: 2.6 GB.** Rollback is `rm -rf storage/tools storage/bakeoff
+storage/cache` — nothing global was modified, so nothing global needs reverting.
+
+### 2.1 Preserved evidence — inference preflight 8/8
+
+Produced before the incident and **valid**. Full detail in the
+[incident report §7](FORGE-003-P0-memory-incident.md).
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `GET /v1/models` | PASS |
+| 2 | `POST /v1/chat/completions` | PASS (usage reported) |
+| 3 | Streaming SSE | PASS (11 chunks, TTFT 0.24 s) |
+| 4 | **Structured tool calling** | PASS — `tool_calls[0].function.name = "run_tests"`, valid JSON arguments |
+| 5 | Tool result → final answer | PASS |
+| 6 | Malformed JSON handling | PASS (HTTP 400) |
+| 7 | Unknown model rejection | PASS (HTTP 404) |
+| 8 | Tool-call structure validity | PASS |
+
+---
+
+## 3. Resource Controller — architecture
+
+```text
+                 ┌─────────────────────────────────────────────┐
+  request ──────▶│  AdmissionController                        │
+                 │   1 policy present?          else REJECT    │
+                 │   2 telemetry obtainable?    else REJECT    │
+                 │   3 concurrency (max 1)      else REJECT    │
+                 │   4 token count (injected)   else REJECT    │
+                 │   5 input limit              else REJECT    │
+                 │   6 output reservation       else REJECT    │
+                 │   7 total context            else REJECT    │
+                 │   8 retained cache budget    else REJECT    │
+                 │   9 available-memory floor   else REJECT    │
+                 │  10 estimate vs headroom     else REJECT    │
+                 │  11                          -> ADMITTED    │
+                 └───────────────┬─────────────────────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+  ProcessSupervisor        Watchdog              TelemetryWriter
+  ownership, PID reuse,    available/swap/       unbuffered JSONL,
+  bounded shutdown,        pageouts/RSS/wall     flushed per sample
+  loopback bind policy     -> abort verdict
+```
+
+**Design rules:** estimate before allocate · reserve the host first · ceilings
+explicit never defaulted · abort beats degrade · evidence survives failure ·
+stepwise only, no automatic escalation · fail closed · the host is production.
+
+### 3.1 Public API
+
+```python
+from services.resource_controller import (
+    ResourceController, ResourcePolicy, AdmissionRequest, Outcome,
+    ModelMetadata, MacOSTelemetrySource, HuggingFaceTokenCounter,
+    ProcessSupervisor, SubprocessAdapter, WatchdogThresholds, JsonlTelemetryWriter,
+)
+
+policy   = ResourcePolicy.from_json_file("storage/config/resource-policy.json")
+counter  = HuggingFaceTokenCounter(tokenizer)      # injected, never loaded here
+metadata = ModelMetadata.from_hf_config(config, weight_bytes=..., runtime_overhead_bytes=...)
+
+controller = ResourceController(
+    policy, counter, metadata, MacOSTelemetrySource(),
+    supervisor=ProcessSupervisor(SubprocessAdapter()),
+    telemetry_writer=JsonlTelemetryWriter("storage/runs/telemetry.jsonl"),
+    watchdog_thresholds=WatchdogThresholds(
+        min_available_bytes=6 * 1024**3,
+        max_swap_used_bytes=2 * 1024**3,
+        max_pageout_rate=5000.0,
+    ),
+)
+
+decision = controller.admit_and_record(AdmissionRequest(
+    messages=[{"role": "user", "content": "..."}],
+    requested_output_tokens=1024,
+    retained_cache_bytes=0,
+))
+if not decision.admitted:
+    ...            # decision.outcome names the reason; nothing is silently altered
+
+verdict = controller.run_watchdog()
+```
+
+### 3.2 Machine-readable outcomes
+
+`ADMITTED` · `REJECTED_CONTEXT` · `REJECTED_MEMORY` · `REJECTED_CONCURRENCY` ·
+`REJECTED_UNVERIFIED_ESTIMATE` · `CANCELLED` · `TIMED_OUT` ·
+`ABORTED_MEMORY_PRESSURE` · `PROCESS_FAILED`
+
+Only `ADMITTED` counts as success. The controller never reduces context,
+substitutes a model, or reports a rejection as a success.
+
+---
+
+## 4. Admission rules
+
+Ordered so that rejections are deterministic. **First failure wins.**
+
+| # | Rule | Outcome on failure |
+|---|---|---|
+| 1 | Policy, tokenizer, metadata and telemetry all present | `REJECTED_UNVERIFIED_ESTIMATE` |
+| 2 | Telemetry readable | `REJECTED_UNVERIFIED_ESTIMATE` |
+| 3 | `active_requests < max_concurrent_requests` (fixed at 1) | `REJECTED_CONCURRENCY` |
+| 4 | Tokens countable via injected tokenizer + chat template | `REJECTED_UNVERIFIED_ESTIMATE` |
+| 5 | `input_tokens <= max_input_tokens` | `REJECTED_CONTEXT` |
+| 6 | `requested_output <= reserved_output_tokens` | `REJECTED_CONTEXT` |
+| 7 | `input + output <= max_context_tokens` | `REJECTED_CONTEXT` |
+| 8 | `retained_cache_bytes <= max_retained_cache_bytes` | `REJECTED_MEMORY` |
+| 9 | `available >= min_available_memory_bytes` | `REJECTED_MEMORY` |
+| 10 | `estimate.total <= available - floor` | `REJECTED_MEMORY` |
+| 11 | — | `ADMITTED` |
+
+**Memory model**
+
+```text
+available = free + inactive + speculative      # NOT "free" alone
+headroom  = available - min_available_memory_bytes
+estimate  = kv_bytes(context)
+          + retained_cache_bytes
+          + transient_reserve_bytes
+          + (weights + overhead  if the model is NOT already resident)
+```
+
+`transient_reserve_bytes` is a **conservative configurable allowance for the
+unmeasured prefill working set** — not a measurement. The true prefill peak
+remains unknown.
+
+**The incident scenario is now refused.** A 32,611-token request on a host with
+9.7 GB available is rejected, not admitted — proven by
+`test_the_incident_scenario_is_now_refused`.
+
+---
+
+## 5. Watchdog and process-cleanup behaviour
+
+**Watchdog** — runs as a **separate lightweight process**
+(`python -m services.resource_controller.watchdog`), so it survives the workload
+it supervises. Samples at 250 ms and aborts on any of:
+
+| Signal | Abort condition |
+|---|---|
+| Available memory | below the configured floor |
+| Swap used | above the limit |
+| Page-out rate | above the limit (pages/s) |
+| Owned-process RSS | above its own ceiling, if configured |
+| Wall clock | above the timeout, if configured |
+| Telemetry loss | immediately — it never flies blind |
+
+**Explicitly best-effort.** A watchdog cannot prevent a stall caused by an
+allocation completing faster than the sampling interval. It narrows the window;
+it does not eliminate it. And **RSS is never the only signal** — a small
+owned-process RSS still aborts when the host is under pressure
+(`test_rss_is_not_the_only_signal`).
+
+**Supervisor** — only ForgeOne-owned processes are ever signalled:
+
+- Identity is `(pid, start_marker, cmdline_fingerprint)`, re-verified
+  immediately before any signal. A mismatch raises `OwnershipMismatchError` and
+  **no signal is sent** — this is the PID-reuse defence.
+- Duplicate service tags are refused.
+- Non-loopback `--host`/`--bind` is refused **before** spawn.
+- Shutdown is bounded: `SIGTERM` to the process group, then `SIGKILL` after the
+  grace period.
+- `cleanup_all()` terminates every owned process and nothing else, and is
+  idempotent.
+
+---
+
+## 6. Test evidence
+
+**Actual results. Both interpreters. Exit codes as observed.**
+
+| Module | Tests |
+|---|---|
+| `test_policy.py` | 9 |
+| `test_estimator.py` | 12 |
+| `test_admission.py` | 17 |
+| `test_watchdog.py` | 13 |
+| `test_supervisor.py` | 16 |
+| `test_controller.py` | 12 |
+| **Total** | **79** |
+
+| Interpreter | Command | Result | Exit code |
+|---|---|---|---|
+| Python **3.12.14** (uv-managed) | `python3.12 -m unittest discover -s tests/unit -t .` | `Ran 79 tests … OK` | **0** |
+| Python **3.9.6** (system) | `python3 -m unittest discover -s tests/unit -t .` | `Ran 79 tests … OK` | **0** |
+
+**Required-case coverage** (all 20 from the milestone brief):
+
+| # | Case | Test |
+|---|---|---|
+| 1 | Safe request admission | `test_safe_request_admitted` |
+| 2 | Input limit exceeded | `test_input_limit_exceeded` |
+| 3 | Output reservation exceeded | `test_output_reservation_exceeded` |
+| 4 | KV estimate exceeds budget | `test_kv_estimate_exceeds_budget` |
+| 5 | Retained cache exceeds budget | `test_retained_cache_exceeds_budget` |
+| 6 | Insufficient available memory | `test_insufficient_available_memory` |
+| 7 | Critical memory pressure | `test_critical_memory_pressure_aborts` |
+| 8 | Rapid swap growth | `test_rapid_swap_growth_via_pageout_rate_aborts`, `test_swap_threshold_aborts` |
+| 9 | Concurrent request rejection | `test_concurrent_request_rejected` |
+| 10 | Missing tokenizer | `test_missing_tokenizer`, `test_unavailable_tokenizer` |
+| 11 | Missing model metadata | `test_missing_model_metadata`, `test_missing_metadata_raises` |
+| 12 | Missing critical policy | `test_missing_critical_field_raises`, `test_every_critical_field_is_required` |
+| 13 | Timeout | `test_timeout_escalates_to_sigkill`, `test_wall_clock_timeout_aborts` |
+| 14 | Cancellation | `test_cancel_owned_process`, `test_start_and_cancel_supervised` |
+| 15 | Watchdog threshold | `test_owned_rss_threshold_aborts`, `test_wall_clock_timeout_aborts` |
+| 16 | Unexpected process exit | `test_unexpected_process_exit` |
+| 17 | Cooldown | `test_cooldown_after_abnormal_exit`, `test_abort_triggers_cooldown` |
+| 18 | Owned-process cleanup | `test_owned_process_cleanup`, `test_cleanup_terminates_all_owned` |
+| 19 | PID reuse protection | `test_pid_reuse_protection`, `test_dead_process_is_not_signalled` |
+| 20 | Persistent telemetry after simulated failure | `test_aborts_and_persists_telemetry`, `test_jsonl_writer_flushes_to_disk` |
+
+**Safety of the test run itself.** No model was imported or loaded; no inference
+was run; no context stress test was performed; the checkpoint was not read. The
+only real process spawned was a trivial `sleep 60`, cleaned up by the
+supervisor. Verified afterwards: zero leftover processes, 9.7 GB still
+available, 0 `mlx` processes.
+
+---
+
+## 7. Limitations and unimplemented requirements
+
+Recorded honestly rather than glossed over.
+
+| # | Limitation | Impact |
+|---|---|---|
+| 1 | **`HuggingFaceTokenCounter` is not validated against the real tokenizer.** It is unit-tested only via a mock. | Token counting against the actual checkpoint is unverified. Must be validated in the smoke test. |
+| 2 | **`--prompt-cache-bytes` is not automatically injected** into the server argv (design criterion 5, PARTIAL). | The ceiling must be passed manually. The policy field exists; injection does not. |
+| 3 | **No port-availability probe** (`netstat` + `bind()`), design criterion 7. | Ports must be checked manually. `lsof` alone is insufficient — proven during the incident. |
+| 4 | **`transient_reserve_bytes` is a conservative allowance, not a measurement.** | Estimates may be pessimistic or optimistic. The true prefill peak is unknown. |
+| 5 | **`weights_bytes` / `runtime_overhead_bytes` are approximate.** | Recorded in `observed-model-metadata.example.json`; must be replaced with measured values. |
+| 6 | **The watchdog is best-effort.** | It cannot guarantee prevention of an OS-level stall. |
+| 7 | **No integration test against a live model server.** | The controller has never gated a real inference request. |
+| 8 | **Safe context ceiling still unknown** (criterion 10). | Any context size above 8,011 tokens is unproven on this hardware. |
+| 9 | **Not wired into any agent runtime.** | Hermes/OpenHands integration is future work. |
+
+---
+
+## 8. Configuration example
+
+`services/resource_controller/policy.example.json`:
+
+```json
+{
+  "max_context_tokens": 16384,
+  "max_input_tokens": 12288,
+  "reserved_output_tokens": 4096,
+  "min_available_memory_bytes": 6442450944,
+  "max_retained_cache_bytes": 2147483648,
+  "transient_reserve_bytes": 3221225472,
+  "request_timeout_s": 300,
+  "cooldown_after_abnormal_exit_s": 120,
+  "max_concurrent_requests": 1,
+  "allow_context_escalation": false
+}
+```
+
+The context limits are **deliberately conservative** because the safe ceiling is
+not established. They must not be raised without a guarded, admitted
+measurement.
+
+---
+
+## 9. Rollback
+
+```bash
+# Remove all FORGE-003 toolchain, runtimes and model data
+rm -rf "$FORGEONE_HOME/storage/tools" \
+       "$FORGEONE_HOME/storage/bakeoff" \
+       "$FORGEONE_HOME/storage/cache"
+
+# Remove disposable fixtures and worktrees
+rm -rf /tmp/forge002-fixture /tmp/forge003-hermes /tmp/forge003-openhands
+```
+
+**Nothing global was modified, so nothing global needs reverting:**
+
+- System Python 3.9.6 — untouched (`python3 --version` still `3.9.6`)
+- No shell rc file modified (`grep storage/tools ~/.zshrc` → 0 matches)
+- No `PATH` change
+- No Homebrew, no `sudo`, no launchd agent, no system preference
+- One transient artefact was created and **removed**: uv wrote a
+  `~/.local/bin/python3.12` symlink; it was deleted and the directory removed.
+  Set `UV_PYTHON_BIN_DIR` inside `storage/` to prevent recreation.
+- The Resource Controller source is ordinary repository code; revert it with Git.
+
+---
+
+## 10. Bake-off readiness
+
+**Not ready.** Two prerequisites remain, both requiring a separately approved,
+guarded run:
+
+1. Measure the transient prefill working set (design criterion 9).
+2. Establish a safe context ceiling under a bounded cache (criterion 10).
+
+Both are cheap to obtain **once the controller is gating the run** — which is
+precisely the point of building it first.
+
+**Is a single fixture run meaningful?** A successful fixture run would be a
+**functional smoke test, not evidence of production-level agent reliability.**
+One small deterministic bug-fix task cannot characterise an agent runtime. The
+evaluation dataset in the blueprint (20–30 representative tasks) remains the
+real measure.
+
+---
+
+## 11. Next steps
+
+| # | Step | Gate |
+|---|---|---|
+| 1 | Validate `HuggingFaceTokenCounter` against the real tokenizer | Smoke test |
+| 2 | Guarded smoke test: controller gates a **single** small inference request | **Separate owner approval** |
+| 3 | Measure `transient_reserve_bytes` empirically under the controller | Same |
+| 4 | Establish the safe context ceiling | Same |
+| 5 | Resume Phase 3 — install agent runtimes | After 2–4 |
+| 6 | Resume Phase 4 — the actual bake-off | After 5 |
+
+**Do not resume the bake-off until the controller has gated at least one real
+inference request successfully.** That is the whole point of this milestone's
+redirection.

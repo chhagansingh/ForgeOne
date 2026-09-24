@@ -78,7 +78,33 @@ All timestamps from `storage/logs/mlx-server.log`; wall-clock times are local.
 
 ## 4. Root cause
 
-### 4.1 Primary — unbounded KV cache accumulation
+### 4.0 Observed, inferred, and unknown
+
+The distinction matters. This incident produced strong evidence, but not proof
+of a single cause.
+
+| Statement | Status |
+|---|---|
+| 8,011-token request succeeded | **OBSERVED** — server log |
+| 24,611-token request succeeded | **OBSERVED** — server log |
+| 32,611-token request failed with Metal OOM | **OBSERVED** — server log |
+| 64K was never reached | **OBSERVED** — the process died at 32,611 tokens |
+| 6.05 GB retained prompt cache immediately before the failing request | **OBSERVED** — server log |
+| `--prompt-cache-bytes` defaults to `None` (no byte ceiling) | **OBSERVED** — mlx-lm 0.31.3 source |
+| `trim_to()` is reached on only one code path | **OBSERVED** — mlx-lm 0.31.3 source |
+| Retained cache contributed to the failure | **INFERRED** — strongly supported |
+| Retained cache was the *sole* cause | **NOT ESTABLISHED** |
+| Transient prefill working set | **UNKNOWN** — never measured |
+| True safe context ceiling on this host | **UNKNOWN** |
+
+**Supported explanation:** retained prompt cache **plus** subsequent allocations
+under inadequate resource controls. The retained cache is a documented
+contributing factor, not a proven sole cause. The Metal command-buffer failure
+occurred *during prefill* of the 32,611-token request, and the transient working
+set for that prefill was never measured — so any claim that the retained cache
+alone caused the crash would overstate the evidence.
+
+### 4.1 Contributing factor — unbounded KV cache accumulation
 
 The MLX-LM prompt cache **retains a KV cache for every distinct request** and
 does not release them between requests. The server logs this explicitly, and it
@@ -101,7 +127,27 @@ entries from earlier requests. The new request then needed its own KV cache
 server exposes both options precisely to bound this behaviour; leaving them
 unset removed the only built-in ceiling.
 
-### 4.2 Secondary — the memory arithmetic was never enforced
+**Source inspection of the installed mlx-lm 0.31.3** (read-only; no model
+loaded) sharpens this into a precise finding:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--prompt-cache-size` | **10** sequences | Bounds the *count* of retained KV caches — **not their bytes** |
+| `--prompt-cache-bytes` | **`None`** | The byte ceiling. When unset, **no byte bound exists at all** |
+
+`trim_to(n_bytes=...)` is called from exactly **one** location
+(`server.py:798`), inside the *batched* generation path, and only when
+`prompt_cache_bytes is not None`. Consequences:
+
+1. With the default configuration, the byte ceiling is **never applied**.
+2. A count limit of 10 says nothing about size: ten large caches can dwarf one
+   enormous cache.
+3. The `_serve_single` path has no cache trimming at all.
+
+This does not prove the retained cache caused the crash (§4.0), but it does
+establish that **no byte-level ceiling existed to prevent it**.
+
+### 4.2 Contributing factor — the memory arithmetic was never enforced
 
 Theoretical KV cost, derived from the model config
 (36 layers × 8 KV heads × 128 head_dim × 2 (K+V) × 2 bytes):
@@ -120,7 +166,7 @@ effective) was **higher** than the theoretical 144 KB/token, because the cache
 held *multiple* sequences — a discrepancy that was not reconciled before
 proceeding.
 
-### 4.3 Tertiary — the test could not have succeeded as designed
+### 4.3 Contributing factor — the test could not have succeeded as designed
 
 The script's token estimation was wrong. It assumed linear growth from a
 repeated filler string, but BPE merges across repetition boundaries make growth

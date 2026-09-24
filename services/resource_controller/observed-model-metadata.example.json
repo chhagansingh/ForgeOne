@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Observed metadata for the FORGE-003 checkpoint, read from its config.json",
+    "during the incident investigation. These are OBSERVED VALUES, not estimates.",
+    "",
+    "Checkpoint: mlx-community/Qwen3-4B-Instruct-2507-4bit",
+    "Revision : 50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+    "",
+    "weight_bytes and runtime_overhead_bytes are APPROXIMATE and must be",
+    "replaced with measured values before this policy is trusted. They are",
+    "recorded here so the estimator has a concrete starting point."
+  ],
+
+  "checkpoint": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+  "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+
+  "from_config_json": {
+    "model_type": "qwen3",
+    "num_hidden_layers": 36,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "hidden_size": 2560,
+    "max_position_embeddings": 262144,
+    "quantization": { "bits": 4, "group_size": 64 },
+    "use_sliding_window": false
+  },
+
+  "derived": {
+    "kv_bytes_per_token_fp16": 147456,
+    "kv_bytes_per_token_note": "2 (K+V) x 36 layers x 8 kv_heads x 128 head_dim x 2 bytes",
+    "kv_gb_at_8k": 1.12,
+    "kv_gb_at_16k": 2.25,
+    "kv_gb_at_32k": 4.5,
+    "kv_gb_at_256k": 36.0,
+    "kv_gb_at_256k_note": "declared max_position_embeddings is NOT runnable on 24 GB"
+  },
+
+  "measured": {
+    "weights_bytes_approx": 2362232013,
+    "runtime_overhead_bytes_approx": 1610612736,
+    "measured_note": "server RSS 1.52 GB idle with model loaded; checkpoint on disk 2.11 GB"
+  }
+}

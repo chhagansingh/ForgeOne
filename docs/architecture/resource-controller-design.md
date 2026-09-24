@@ -2,10 +2,51 @@
 
 - **Milestone:** M1 / FORGE-003
 - **Date:** 2026-09-24
-- **Status:** **Design only. Not implemented.**
+- **Status:** **Implemented** — core controller, admission, supervisor and
+  watchdog with 79 passing unit tests. **Not yet exercised against a real model
+  server** (that is the separately-approved smoke test).
 - **Trigger:** [FORGE-003 P0 memory incident](../reports/FORGE-003-P0-memory-incident.md)
 - **Scope:** Any ForgeOne workload that allocates significant memory — model
   servers, agent runtimes, media pipelines, ForgeStream experiments
+
+## 0. Implementation status
+
+| Capability | Design | Implemented | Unit-tested | Exercised against a real server |
+|---|---|---|---|---|
+| Explicit resource policy (fail-closed) | yes | yes | **yes** | no |
+| Admission control (11-step ordered gate) | yes | yes | **yes** | no |
+| Token counting via injected tokenizer | yes | yes | yes (mock only) | **no** |
+| KV estimation from model metadata | yes | yes | **yes** | no |
+| Process supervisor (ownership, PID reuse) | yes | yes | **yes** | partially (trivial `sleep`) |
+| Loopback bind enforcement | yes | yes | **yes** | yes |
+| Independent watchdog + thresholds | yes | yes | **yes** | no |
+| Unbuffered JSONL telemetry | yes | yes | **yes** | no |
+| Cooldown after abnormal exit | yes | yes | **yes** | no |
+
+**Code:** `services/resource_controller/` — Python standard library only, no
+third-party dependencies, compatible with Python 3.9+ (verified on 3.9.6 and
+3.12.14).
+
+**Test evidence:** 79 tests, 79 passed, exit code 0 on both interpreters. See
+[FORGE-003 bake-off report §5](../reports/FORGE-003-runtime-bakeoff.md).
+
+### 0.1 Corrections applied during implementation
+
+Three design assumptions did not survive contact with the code and were
+corrected rather than worked around:
+
+1. **Residency double-counting.** The design charged model weights to every
+   request. That is wrong when the model is already loaded — its footprint is
+   already reflected in `available_bytes`. `Estimate.model_resident` now
+   controls whether weights and overhead are charged, so starting a server
+   (non-resident) costs more than serving a request through it.
+2. **`Pages free` is not the signal.** Empirically, a healthy macOS host on this
+   machine reports ~0.25 GB free while holding 9.7 GB of reclaimable inactive
+   and speculative pages. Admission and the watchdog use
+   `available = free + inactive + speculative`.
+3. **Configuration is JSON, not YAML.** YAML would require a third-party
+   dependency, which contradicts "small and runtime-independent". JSON is
+   stdlib-parseable. See §10.
 
 ## 1. Purpose
 
@@ -219,41 +260,47 @@ for size in [2K, 4K, 8K, 16K, 32K]:
 
 The controller reads the class from configuration; it never infers it.
 
-## 10. Configuration schema
+## 10. Configuration
 
-```yaml
-# storage/config/resource-controller.yaml  (Git-ignored)
-host:
-  class: workstation
-  total_ram_gb: 24
-  reserve_abs_gb: 6
-  reserve_pct: 0.25
-  safety_factor: 0.70
-  min_free_gb: 4
+**JSON, deliberately.** YAML would require a third-party dependency
+(`PyYAML`), contradicting the "small, runtime-independent" requirement. JSON is
+stdlib-parseable, so the controller has **zero dependencies**.
 
-watchdog:
-  sample_interval_ms: 250
-  rss_warn_ratio: 0.80
-  rss_abort_ratio: 1.20
-  swap_warn_gb: 2
-  swap_abort_gb: 4
-  ttft_warn_s: 60
-  ttft_abort_s: 180
+Two example files ship with the implementation:
 
-ceilings:
-  model_server:
-    prompt_cache_bytes: 2_000_000_000
-    prompt_cache_size: 8
-    bind: 127.0.0.1
+| File | Purpose |
+|---|---|
+| [`policy.example.json`](../../services/resource_controller/policy.example.json) | The resource budget. Copy to a Git-ignored path and adjust. |
+| [`observed-model-metadata.example.json`](../../services/resource_controller/observed-model-metadata.example.json) | Observed checkpoint geometry (`config.json` values, KV bytes/token, measured footprint). |
 
-evidence:
-  dir: storage/runs
-  flush_immediately: true
+Policy shape (`ResourcePolicy.from_mapping`):
 
-escalation:
-  sizes: [2048, 4096, 8192, 16384, 32768]
-  stop_on_first_pressure: true
+```json
+{
+  "max_context_tokens": 16384,
+  "max_input_tokens": 12288,
+  "reserved_output_tokens": 4096,
+
+  "min_available_memory_bytes": 6442450944,
+  "max_retained_cache_bytes": 2147483648,
+  "transient_reserve_bytes": 3221225472,
+
+  "request_timeout_s": 300,
+  "cooldown_after_abnormal_exit_s": 120,
+
+  "max_concurrent_requests": 1,
+  "allow_context_escalation": false
+}
 ```
+
+Watchdog thresholds are a separate structure
+(`WatchdogThresholds`): `min_available_bytes`, `max_swap_used_bytes`,
+`max_pageout_rate`, `sample_interval_s`, and optional `max_owned_rss_bytes` and
+`max_wall_clock_s`.
+
+**All eight core policy fields are required.** A missing, non-numeric or
+non-positive field raises `PolicyError` and the workload does not run. There is
+no fallback default — an unknown budget is treated as an unsafe budget.
 
 ## 11. Failure modes and responses
 
@@ -288,20 +335,21 @@ escalation:
 
 The controller is not trustworthy until all of these are demonstrated:
 
-| # | Criterion | Status |
-|---|---|---|
-| 1 | Refuses a workload whose estimate exceeds the budget | NOT_IMPLEMENTED |
-| 2 | Refuses when no estimate can be produced | NOT_IMPLEMENTED |
-| 3 | Aborts on a simulated free-memory breach | NOT_IMPLEMENTED |
-| 4 | Aborts on a simulated swap breach | NOT_IMPLEMENTED |
-| 5 | Injects `--prompt-cache-bytes` and rejects a workload that cannot accept it | NOT_IMPLEMENTED |
-| 6 | Produces a complete evidence file for an **aborted** run | NOT_IMPLEMENTED |
-| 7 | Verifies ports with `netstat` + `bind()` probe | NOT_IMPLEMENTED |
-| 8 | Records an incident automatically on abort | NOT_IMPLEMENTED |
-| 9 | `prefill_working_set` measured empirically for the checkpoint in use | NOT_RUN |
-| 10 | Safe context ceiling established under a bounded cache | NOT_RUN |
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | Refuses a workload whose estimate exceeds the budget | **PASS** | `test_kv_estimate_exceeds_budget`, `test_non_resident_model_can_be_rejected…` |
+| 2 | Refuses when no estimate can be produced | **PASS** | `test_missing_tokenizer`, `test_missing_model_metadata`, `test_missing_critical_policy`, `test_unavailable_telemetry_fails_closed` |
+| 3 | Aborts on a simulated available-memory breach | **PASS** | `test_critical_memory_pressure_aborts` |
+| 4 | Aborts on a simulated swap breach | **PASS** | `test_swap_threshold_aborts`, `test_rapid_swap_growth_via_pageout_rate_aborts` |
+| 5 | Enforces `--prompt-cache-bytes` as mandatory | **PARTIAL** — the flag mapping is documented (incident report §4.1) and the policy field exists, but automatic injection into the server argv is **not implemented** | — |
+| 6 | Produces a complete evidence file for an **aborted** run | **PASS** | `test_aborts_and_persists_telemetry`, `test_jsonl_writer_flushes_to_disk` |
+| 7 | Verifies ports with `netstat` + `bind()` probe | **NOT_IMPLEMENTED** — the supervisor enforces loopback binding from argv, but no port-availability probe exists | — |
+| 8 | Records an incident automatically on abort | **PASS** | `test_abort_triggers_cooldown`, watchdog writes an `abort` record |
+| 9 | `prefill_working_set` measured empirically | **NOT_RUN** | Requires a guarded inference run |
+| 10 | Safe context ceiling established under a bounded cache | **NOT_RUN** | Requires a guarded inference run |
 
-**Criteria 9 and 10 are prerequisites for resuming the FORGE-003 bake-off.**
+**Criteria 9 and 10 remain prerequisites for resuming the FORGE-003 bake-off.**
+Criteria 5 and 7 are known gaps, recorded rather than glossed over.
 
 ## 15. Open questions
 

@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "ForgeOne Resource Controller - example policy for the FORGE-003 host.",
+    "Copy to a Git-ignored location (e.g. storage/config/resource-policy.json)",
+    "and adjust. Every field below is REQUIRED except the two invariants.",
+    "JSON is used deliberately: it is stdlib-parseable, so the controller has",
+    "zero third-party dependencies.",
+    "",
+    "The context limits below are deliberately conservative. The safe context",
+    "ceiling for this hardware is NOT yet established - the FORGE-003 incident",
+    "showed that a 32,611-token request crashed the Metal backend. Do not raise",
+    "these values without a guarded, admitted measurement."
+  ],
+
+  "max_context_tokens": 16384,
+  "max_input_tokens": 12288,
+  "reserved_output_tokens": 4096,
+
+  "min_available_memory_bytes": 6442450944,
+  "max_retained_cache_bytes": 2147483648,
+  "transient_reserve_bytes": 3221225472,
+
+  "request_timeout_s": 300,
+  "cooldown_after_abnormal_exit_s": 120,
+
+  "max_concurrent_requests": 1,
+  "allow_context_escalation": false
+}
