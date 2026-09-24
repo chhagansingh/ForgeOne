@@ -1,0 +1,168 @@
+# ForgeOne — controlled model registry
+#
+# A registered candidate is NOT automatically approved for download.
+# Approval is a separate, explicit owner decision recorded in `approval`.
+#
+# IMPORTANT: entries marked `verification: unverified` were named by the owner
+# but their exact repository, revision, format and quantization have NOT been
+# confirmed against an upstream source. Per the milestone instruction, missing
+# model IDs are NOT invented here. Such an entry may not be downloaded until
+# verified.
+
+version: 1
+updated: "2026-09-24"
+
+defaults:
+  destination: "storage/models"
+  hf_cache: "storage/cache/huggingface/hub"
+  # Registry-driven selection only; the manager never falls back silently.
+  allow_global_cache_fallback: false
+  auto_load_after_download: false
+
+models:
+
+  # ---------------------------------------------------------------- INSTALLED
+  - id: "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    role: "Local inference test model — protected smoke test and agent loop"
+    source: "Hugging Face"
+    revision: "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
+    architecture: "qwen3"
+    parameters: "4B"
+    format: "MLX safetensors"
+    quantization: "4-bit, group_size 64"
+    backend: "MLX-LM 0.31.3"
+    license: "check upstream model card before redistribution"
+    disk_footprint: "2.1 GiB"
+    runtime_memory_estimate: "~2.2 GiB weights + ~1.5 GiB runtime overhead"
+    kv_bytes_per_token: 147456
+    context:
+      declared_max: 262144
+      exercised: 2048
+      safe_ceiling: "UNKNOWN — never measured"
+    tool_calling:
+      supported: true
+      evidence: "real structured tool_calls verified in the protected smoke test"
+    destination: "storage/cache/huggingface/hub"
+    download_status: "installed"
+    verification_status: "verified — real tokenizer + tool calling + protected session PASS"
+    approval: "approved and installed"
+    notes: >
+      Observed metadata in
+      services/resource_controller/observed-model-metadata.example.json.
+      The declared 262144-token context is NOT runnable on 24 GB (~36 GiB of
+      KV cache alone).
+
+  # ------------------------------------------------------------- CANDIDATES
+  - id: "IFM/K2-Horizon-3.7B"
+    role: "Compact coding challenger"
+    source: "named by owner — upstream repository NOT yet confirmed"
+    revision: null
+    architecture: null
+    parameters: "3.7B (as named)"
+    format: null
+    quantization: null
+    backend: "undetermined"
+    license: "unknown"
+    disk_footprint: "unknown"
+    runtime_memory_estimate: "unknown"
+    destination: "storage/models/llm"
+    download_status: "not downloaded"
+    verification_status: "unverified — exact repo/revision/format must be confirmed"
+    approval: "NOT approved for download"
+    notes: "No repository ID was supplied. Do not invent one."
+
+  - id: "IFM/K2-Horizon-0.9B-GGUF"
+    role: "Lightweight specialist"
+    source: "named by owner — upstream repository NOT yet confirmed"
+    revision: null
+    architecture: null
+    parameters: "0.9B (as named)"
+    format: "GGUF (as named)"
+    quantization: "unknown"
+    backend: "llama.cpp-compatible (not installed)"
+    license: "unknown"
+    disk_footprint: "unknown"
+    runtime_memory_estimate: "unknown"
+    destination: "storage/models/llm"
+    download_status: "not downloaded"
+    verification_status: "unverified"
+    approval: "NOT approved for download"
+    notes: "GGUF implies a llama.cpp-style runtime, which ForgeOne has not installed."
+
+  - id: "Qwen3.8-27B"
+    role: "Future larger-model candidate"
+    source: "named by owner — exact repository NOT confirmed"
+    revision: null
+    architecture: null
+    parameters: "27B (as named)"
+    format: null
+    quantization: null
+    backend: "undetermined"
+    license: "unknown"
+    disk_footprint: "unknown"
+    runtime_memory_estimate: >
+      A 27B model at 4-bit is roughly 15 GiB of weights alone, before KV cache.
+      That is unlikely to fit comfortably in 24 GB alongside IDEs and would
+      breach the one-heavy-model-at-a-time rule.
+    destination: "storage/models/llm"
+    download_status: "not downloaded"
+    verification_status: "unverified — repo, revision, format and quant must be verified"
+    approval: "NOT approved for download"
+    notes: "Feasibility on 24 GB unified memory is doubtful and must be assessed first."
+
+  # ------------------------------------------------- blueprint media (M8)
+  - id: "FLUX"
+    role: "Image generation adapter (blueprint M8: 'media adapter: FLUX / LTX')"
+    source: "blueprint names the family only — no exact repository recorded"
+    revision: null
+    parameters: null
+    format: null
+    quantization: null
+    backend: "compatible runtime — not selected"
+    license: "unknown"
+    destination: "storage/models/image"
+    download_status: "not downloaded"
+    verification_status: "unverified — blueprint names the family, not a checkpoint"
+    approval: "NOT approved for download"
+    notes: "M8 is not started. Multiple FLUX variants exist with different licences."
+
+  - id: "LTX"
+    role: "Video generation adapter (blueprint M8)"
+    source: "blueprint names the family only — no exact repository recorded"
+    revision: null
+    parameters: null
+    format: null
+    quantization: null
+    backend: "compatible runtime — not selected"
+    license: "unknown"
+    destination: "storage/models/video"
+    download_status: "not downloaded"
+    verification_status: "unverified"
+    approval: "NOT approved for download"
+
+  # ------------------------------------- future Decision Layer candidates
+  - id: "JEV"
+    role: "Future Decision Layer candidate"
+    source: "named by owner — NOT assumed to be a downloadable checkpoint"
+    download_status: "not downloaded"
+    verification_status: "unverified — may not be a local checkpoint at all"
+    approval: "NOT approved for download"
+    notes: >
+      The milestone explicitly says not to assume JEV is a downloadable local
+      checkpoint. It is recorded as a candidate concept, not a model artefact.
+
+  - id: "LAYA"
+    role: "Future Decision Layer candidate"
+    source: "named by owner"
+    download_status: "not downloaded"
+    verification_status: "unverified"
+    approval: "NOT approved for download"
+    notes: "Same caveat as JEV."
+
+# ---------------------------------------------------------------------------
+# Approved download batch
+# ---------------------------------------------------------------------------
+# Empty on purpose. No model is approved for download by this milestone, and
+# nothing was downloaded. The next batch must be proposed and approved
+# separately — see docs/reports/FORGE-003-storage-audit.md.
+approved_download_batch: []

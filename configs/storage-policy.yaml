@@ -1,0 +1,118 @@
+# ForgeOne — canonical storage policy
+#
+# Every ForgeOne-owned persistent asset lives under $FORGEONE_HOME/storage/.
+# Nothing here modifies global shell profiles, HOME, system Python or macOS
+# settings. `scripts/forgeone-env.sh` exports these values for a process tree.
+#
+# $FORGEONE_HOME is the repository root (the Git checkout itself).
+
+version: 1
+
+root: "$FORGEONE_HOME/storage"
+
+# ---------------------------------------------------------------------------
+# Stable locations
+# ---------------------------------------------------------------------------
+paths:
+  models: "storage/models"
+  cache: "storage/cache"
+  huggingface: "storage/cache/huggingface"
+  uv_cache: "storage/cache/uv"
+  pip_cache: "storage/cache/pip"
+  xet_cache: "storage/cache/xet"
+  assets_cache: "storage/cache/assets"
+  tools: "storage/tools"
+  environments: "storage/environments"
+  runtimes: "storage/runtimes"
+  runs: "storage/runs"
+  logs: "storage/logs"
+  tmp: "storage/tmp"
+  secrets: "storage/secrets"
+  worktrees: "storage/worktrees"
+  artifacts: "storage/artifacts"
+  benchmarks: "storage/benchmarks"
+
+# ---------------------------------------------------------------------------
+# Environment variables applied to every ForgeOne process tree
+# ---------------------------------------------------------------------------
+environment:
+  HF_HOME: "storage/cache/huggingface"
+  HF_HUB_CACHE: "storage/cache/huggingface/hub"
+  HF_XET_CACHE: "storage/cache/xet"
+  HF_ASSETS_CACHE: "storage/cache/assets"
+  UV_CACHE_DIR: "storage/cache/uv"
+  UV_PYTHON_INSTALL_DIR: "storage/tools/python"
+  UV_PYTHON_BIN_DIR: "storage/tools/bin"
+  UV_TOOL_DIR: "storage/tools/uv-tools"
+  PIP_CACHE_DIR: "storage/cache/pip"
+  TMPDIR: "storage/tmp"
+  # Documented for a future milestone. Xinference is NOT installed and this
+  # task does not install it.
+  XINFERENCE_HOME: "storage/runtimes/xinference"
+
+# ---------------------------------------------------------------------------
+# Guardrails
+# ---------------------------------------------------------------------------
+guardrails:
+  # Keep at least this much free before any download is admitted.
+  min_free_disk_gib: 150
+  # Never stage anything from storage/ into Git.
+  git_ignored: true
+  # A download is a separate, owner-approved action. The manager defaults to
+  # dry-run and refuses to start without an explicit --execute.
+  downloads_require_explicit_execute: true
+  # No concurrent large downloads.
+  max_concurrent_downloads: 1
+  # Never load a model automatically after download.
+  auto_load_after_download: false
+  # No silent fallback to a global cache outside $FORGEONE_HOME.
+  allow_global_cache_fallback: false
+
+# ---------------------------------------------------------------------------
+# Asset classes and their disposition
+# ---------------------------------------------------------------------------
+# `centralized`  — already inside $FORGEONE_HOME/storage/ (no action)
+# `migratable`   — ForgeOne-owned, outside, safe to relocate
+# `external`     — NOT ForgeOne-owned; never migrate
+assets:
+  - id: uv-binary
+    path: "storage/tools/uv"
+    class: centralized
+    note: "Standalone uv 0.12.18, checksum-verified at install"
+  - id: python-312
+    path: "storage/tools/python"
+    class: centralized
+    note: "uv-managed CPython 3.12.14; system Python untouched"
+  - id: mlx-env
+    path: "storage/bakeoff/model-venv"
+    class: centralized
+    note: "mlx-lm 0.31.3 + real tokenizer. Venv -- do NOT relocate blindly."
+  - id: openhands-env
+    path: "storage/bakeoff/openhands-venv"
+    class: centralized
+    note: "OpenHands SDK 1.49.5. Venv -- do NOT relocate blindly."
+  - id: qwen3-4b-checkpoint
+    path: "storage/cache/huggingface/hub"
+    class: centralized
+    note: "2.1 GB. Snapshot symlinks resolve INSIDE storage/ (verified)."
+  - id: uv-download-cache
+    path: "~/.cache/uv"
+    class: migratable
+    size: "855 MB"
+    note: "Pure download cache, no absolute paths inside. Safe to relocate."
+  - id: user-hf-cache
+    path: "~/.cache/huggingface"
+    class: external
+    size: "136 KB"
+    note: "Pre-existing PaddleOCR configs, NOT ForgeOne-owned. Never migrate."
+
+# ---------------------------------------------------------------------------
+# Virtual environments — explicitly NOT relocated
+# ---------------------------------------------------------------------------
+# Python venvs embed absolute interpreter paths in bin/* scripts and in
+# pyvenv.cfg. Moving one silently breaks it. Both venvs are ALREADY inside
+# storage/, so there is nothing to migrate. Any future relocation of a working
+# venv requires explicit owner approval and a recreate-not-move approach.
+venv_policy:
+  relocate_existing: false
+  rationale: "absolute paths in bin/ and pyvenv.cfg; recreate rather than move"

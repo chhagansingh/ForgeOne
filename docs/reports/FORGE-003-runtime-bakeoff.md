@@ -658,6 +658,20 @@ did its job)** · GUI **NOT_TESTED** · Hermes **NOT_RUN**.
 
 **No agent completed a coding task.**
 
+## 11.10 Storage audit and model registry
+
+Persistent assets are **~97% centralized** under `storage/` (3.1 GB: uv, managed
+Python, both venvs, the 2.1 GB checkpoint). **Zero symlinks escape `storage/`**.
+One 855 MB `~/.cache/uv` is ForgeOne-owned and outside — awaiting owner approval
+for cleanup, not moved.
+
+A controlled model registry (8 entries, **0 approved for download, 0 downloaded**)
+and a dry-run-by-default model manager are in place. All candidates except the
+installed Qwen3-4B are **`unverified`**, and the manager **refuses** to download
+them — no repository IDs were invented.
+
+See [FORGE-003-storage-audit.md](FORGE-003-storage-audit.md).
+
 ## 12. Next steps
 
 | # | Step | Gate |
