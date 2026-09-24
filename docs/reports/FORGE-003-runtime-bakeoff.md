@@ -616,6 +616,48 @@ closed unless `api_mode="chat"`, `stream=False`, `num_retries=0`, and explicit
 Recommended next context: **4,096**, to be established by a guarded incremental
 measurement — not assumed.
 
+### 11.9 First real coding attempt @ 4K — **BLOCKED at the safety gate**
+
+The owner approved one guarded session at a **4,096-token** context. Phases 0–2
+passed. **Phase 3 stopped it before any model was loaded.**
+
+**What passed first:**
+
+| Check | Result |
+|---|---|
+| Workspace / branch / HEAD / clean tree | MATCH `ec2d394` |
+| No ForgeOne model process · ports 8082 & 8084 free | PASS |
+| Token budget vs the 4K approval | compact initial **2,212 ≤ 3,072**; +128 = **2,340 ≤ 4,096**; max workflow **2,446 ≤ 4,096** — **FITS** |
+| Tool schemas present in the real SDK request | `["terminal", "file_editor"]` |
+| SDK configuration dry-run (**no LLM call**) | `api_mode=chat`, `stream=False`, `num_retries=0`, **`uses_responses_api=False`**; `Agent` and `Conversation` constructed |
+
+**What blocked it — the workstation safety gate:**
+
+| Gate | Required | Observed | |
+|---|---|---|---|
+| Available memory | ≥ 8.00 GiB | **7.65 GiB** | **FAIL** |
+| Projected post-admission reserve | ≥ 4.00 GiB | **2.95 GiB** | **FAIL** |
+| Ongoing swap growth (12 s) | not concerning | **+0.000 GiB** | PASS |
+| Page-out trend | not concerning | **0.0/s** | PASS |
+
+**Sustained, not transient:** 9 samples over 45 s ranged 7.52–7.82 GiB; **0 of 9**
+reached 8 GiB. With a 4.70 GiB cold-start estimate, the gate needs **≥ 8.70 GiB**
+available — the machine is roughly **1 GiB short**.
+
+**The gate failed on *headroom*, not on *pressure*:** swap was flat at 3.22 GiB
+and page-outs were zero throughout. This is not an unwell machine; it is a busy
+one.
+
+**Correct action taken:** the model was **not started**, owner applications were
+**not closed**, and **no unrelated process was terminated** to force the test
+through — exactly as the instruction required.
+
+**Result:** gateway **NOT_RUN** · OpenHands SDK execution **NOT_RUN** · coding
+task **BLOCKED** · fixture tests **NOT_RUN** · resource safety **gate PASSED (it
+did its job)** · GUI **NOT_TESTED** · Hermes **NOT_RUN**.
+
+**No agent completed a coding task.**
+
 ## 12. Next steps
 
 | # | Step | Gate |

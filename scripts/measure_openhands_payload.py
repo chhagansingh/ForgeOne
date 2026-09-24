@@ -26,8 +26,10 @@ REVISION = "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
 SNAP = (REPO / "storage/cache/huggingface/hub"
         / f"models--{CHECKPOINT.replace('/', '--')}" / "snapshots" / REVISION)
 
-BUDGET_CONTEXT = 2048
-BUDGET_OUTPUT = 128
+# Budget is configurable so the same script is reproducible against both the
+# original 2,048-token baseline and the owner-approved 4,096-token session.
+BUDGET_CONTEXT = int(os.environ.get("FORGEONE_BUDGET_CONTEXT", "2048"))
+BUDGET_OUTPUT = int(os.environ.get("FORGEONE_BUDGET_OUTPUT", "128"))
 
 
 def main() -> int:

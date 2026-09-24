@@ -262,6 +262,31 @@ Hermes was **not installed and not executed.**
    protected gateway.
 4. **Then** Hermes, under the same endpoint and budget.
 
+## 10.1 Follow-up — the 4K session was attempted and blocked at the gate
+
+The owner approved a 4,096-token context. Re-measured against it, the compact
+profile **FITS**:
+
+| Check | Value | Limit | |
+|---|---|---|---|
+| Compact initial input | 2,212 | 3,072 | OK |
+| + reserved output | 2,340 | 4,096 | OK |
+| Max workflow input | 2,318 | 3,072 | OK |
+| Max + output | 2,446 | 4,096 | OK |
+
+The SDK was also verified to construct with `api_mode="chat"`,
+`stream=False`, `num_retries=0` and `uses_responses_api=False` — **no LLM call**.
+
+The session was then **BLOCKED at the workstation safety gate**: available
+memory 7.65 GiB against an 8.00 GiB floor, and a projected reserve of 2.95 GiB
+against 4.00 GiB — sustained across 9 samples over 45 s, with swap flat and
+page-outs zero. The model was not started and no application was closed to force
+it through. See [bake-off report §11.9](FORGE-003-runtime-bakeoff.md).
+
+The `measure_openhands_payload.py` budget is now configurable
+(`FORGEONE_BUDGET_CONTEXT` / `FORGEONE_BUDGET_OUTPUT`) so both thresholds are
+reproducible from the same script.
+
 ## 11. What this report does NOT claim
 
 - It does **not** claim an agent completed a coding task. None ran.
