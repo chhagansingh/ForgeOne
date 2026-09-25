@@ -105,6 +105,11 @@ class ProtectedServerConfig:
     module: str = "mlx_lm.server"
     extra_args: Tuple[str, ...] = field(default_factory=tuple)
     allow_unbounded_serving_path: bool = False
+    #: Optional complete argv. Used by non-MLX backends (e.g. llama-server)
+    #: whose command line is not MLX-shaped. When set, ``build_argv`` returns
+    #: it verbatim instead of composing the MLX form. Backward compatible:
+    #: unset means the previous behaviour, unchanged.
+    argv_override: Optional[Tuple[str, ...]] = None
 
     def __post_init__(self) -> None:
         if not self.executable:
@@ -160,6 +165,8 @@ class ProtectedServerConfig:
     # ------------------------------------------------------------------
     def build_argv(self) -> list:
         """Build argv as a list. Never a shell string; no interpolation."""
+        if self.argv_override is not None:
+            return list(self.argv_override)
         argv = [
             self.executable,
             "-m",
