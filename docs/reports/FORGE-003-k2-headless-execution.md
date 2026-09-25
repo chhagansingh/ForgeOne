@@ -39,10 +39,17 @@ Terminal.app, not an IDE terminal.
 
 ### Step 4 — Preflight (safe: never loads weights)
 
+Terminal starts in your home directory, **not** in a Git repository, so
+`git rev-parse` would fail there. Substitute your actual project root — this
+repo is public, so the owner-local absolute path is deliberately not committed:
+
 ```bash
-# From the repository root (this repo is public, so the owner-local absolute
-# path is deliberately not hardcoded here):
-cd "$(git rev-parse --show-toplevel)"   # if you are already inside the repo
+# 1. Go to the project root. Replace the placeholder with your real path:
+cd "$FORGEONE_HOME"          # if you have exported it in this shell
+# or, one-off:
+cd "/path/to/your/ForgeOne project root"
+
+# 2. Preflight (safe: never loads weights):
 ./scripts/run_k2_headless_smoke.sh --check
 ```
 
@@ -59,6 +66,8 @@ Exit codes: `0` admitted · `2` blocked.
 ```bash
 ./scripts/run_k2_headless_smoke.sh --execute
 ```
+
+Run it from the same shell, still in the project root.
 
 This runs **exactly one** bounded session:
 

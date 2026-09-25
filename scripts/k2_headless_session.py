@@ -136,6 +136,29 @@ def preflight() -> dict:
     return result
 
 
+def unsupported_argv_flags(argv: list) -> list:
+    """Reject any flag the pinned binary does not advertise.
+
+    Every generated option is checked against the binary's own --help BEFORE
+    model startup. A typo like `--no-prompt-cache` would otherwise abort
+    startup after the weights were already being mapped.
+    """
+    r = subprocess.run([str(RUNTIME_BIN), "--help"], capture_output=True, text=True, timeout=60)
+    help_text = r.stdout + r.stderr
+    known = set()
+    for token in help_text.replace(",", " ").split():
+        if token.startswith("-"):
+            known.add(token.strip())
+    bad = []
+    for a in argv:
+        if not isinstance(a, str) or not a.startswith("-"):
+            continue
+        name = a.split("=", 1)[0]
+        if name not in known:
+            bad.append(name)
+    return sorted(set(bad))
+
+
 def conflicting_processes() -> list:
     out = []
     for pat in ("llama-server", "mlx_lm.server"):
@@ -228,8 +251,14 @@ def execute() -> int:
             "--host", HOST, "--port", str(BACKEND_PORT),
             "-c", str(CTX), "-n", str(OUTPUT),
             "--parallel", str(SLOTS), "-b", str(BATCH), "-ub", str(UBATCH),
-            "--no-context-shift", "--no-prompt-cache", "--jinja",
+            "--no-context-shift", "--jinja",
         ]
+        # NOTE: `--no-prompt-cache` was previously passed and DOES NOT EXIST in
+        # the pinned binary -- it would have aborted startup immediately. There
+        # is no direct "disable prompt cache" flag in this build; retention is
+        # bounded by --parallel 1 and the 1024-token context instead. KV
+        # offload is left at its default (enabled), which is what we want for
+        # Metal. Every flag below was verified against the pinned --help.
         cfg = ProtectedServerConfig(
             executable=str(RUNTIME_BIN), model=str(checkpoint),
             port=BACKEND_PORT, cache=cache,
@@ -238,7 +267,13 @@ def execute() -> int:
             # retention is disabled with --no-prompt-cache instead.
             argv_override=tuple(argv),
         )
-        emit("argv", "OK", argv=argv)
+        # Reject unsupported flags BEFORE any weights are mapped.
+        bad_flags = unsupported_argv_flags(argv)
+        if bad_flags:
+            emit("argv", "BLOCKED", unsupported=bad_flags)
+            print(f"BLOCKED: pinned binary does not support {bad_flags}", file=sys.stderr)
+            return EXIT_BLOCKED
+        emit("argv", "OK", argv=argv, validated_against="pinned --help")
 
         writer = JsonlTelemetryWriter(RUNS / "k2-headless-admission.jsonl")
         controller = ResourceController(
@@ -276,24 +311,90 @@ def execute() -> int:
         if not ok:
             return EXIT_ABORTED
 
+        # --- K2 tokenizer bootstrap: MUST succeed before any inference --------
+        # Uses the backend's OWN tokenizer over its HTTP API. Qwen token counts
+        # and character-count estimates are never substituted.
+        token_counts = None
+        for path, payload in (
+            ("/tokenize", {"content": PROMPT}),
+            ("/v1/tokenize", {"content": PROMPT}),
+        ):
+            try:
+                rq = urllib.request.Request(
+                    f"http://{HOST}:{BACKEND_PORT}{path}",
+                    data=json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                with urllib.request.urlopen(rq, timeout=30) as rs:
+                    got = json.loads(rs.read().decode())
+                if isinstance(got, dict) and isinstance(got.get("tokens"), list):
+                    token_counts = {"endpoint": path, "tokens": len(got["tokens"])}
+                    break
+            except Exception:
+                continue
+
+        if token_counts is None:
+            emit("token_accounting", "TOKEN_ACCOUNTING_BLOCKED",
+                 reason="backend exposes no usable tokenize endpoint")
+            summary["token_accounting"] = {"status": "TOKEN_ACCOUNTING_BLOCKED"}
+            print("TOKEN_ACCOUNTING_BLOCKED: refusing to forward inference", file=sys.stderr)
+            return EXIT_BLOCKED
+        if token_counts["tokens"] + OUTPUT > CTX:
+            emit("token_accounting", "TOKEN_ACCOUNTING_BLOCKED",
+                 tokens=token_counts["tokens"], ctx=CTX, output=OUTPUT)
+            return EXIT_BLOCKED
+        summary["token_accounting"] = {
+            "status": "TOKEN_ACCOUNTING_VALIDATED", **token_counts,
+            "reserved_output": OUTPUT, "ctx": CTX,
+        }
+        emit("token_accounting", "TOKEN_ACCOUNTING_VALIDATED", **token_counts)
+
         # --- one inference through the gateway -------------------------------
         gateway = ProtectedGateway(backend)
         http = GatewayHTTPServer(gateway, GATEWAY_PORT)
         http.start()
         emit("gateway", "OK", port=GATEWAY_PORT)
 
+        # The request goes through the ProtectedGateway HTTP endpoint, NOT
+        # directly to the backend on 8082. This exercises the real end-to-end
+        # path: gateway -> admission -> reservation -> backend.
+        import urllib.error
+        import urllib.request
+
         t0 = time.time()
-        result = backend.request([{"role": "user", "content": PROMPT}], OUTPUT, label="k2")
+        body = json.dumps({
+            "model": CHECKPOINT,
+            "messages": [{"role": "user", "content": PROMPT}],
+            "max_tokens": OUTPUT,
+            "stream": False,
+        }).encode()
+        req = urllib.request.Request(
+            f"http://{HOST}:{GATEWAY_PORT}/v1/chat/completions",
+            data=body, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                status = resp.status
+                payload = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            payload = json.loads(exc.read().decode() or "{}")
         elapsed = time.time() - t0
+
+        choice = (payload.get("choices") or [{}])[0]
+        content = (choice.get("message") or {}).get("content")
         summary["request"] = {
-            "outcome": result.outcome.value, "executed": result.executed,
-            "input_tokens": result.decision.input_tokens if result.decision else None,
+            "http_status": status,
+            "gateway": f"{HOST}:{GATEWAY_PORT}",
+            "forgeone_outcome": (payload.get("forgeone") or {}).get("outcome"),
+            "input_tokens": (payload.get("forgeone") or {}).get("input_tokens"),
+            "finish_reason": choice.get("finish_reason"),
             "elapsed_s": round(elapsed, 2),
-            "response": (result.response or {}).get("choices", [{}])[0]
-                        .get("message", {}).get("content") if result.response else None,
+            "response": content,
+            "chars": len(content) if isinstance(content, str) else 0,
         }
-        emit("inference", result.outcome.value, **{k: v for k, v in summary["request"].items() if k != "response"})
-        code = EXIT_OK if result.admitted else EXIT_ABORTED
+        emit("inference", "OK" if status == 200 else "FAIL",
+             http_status=status, elapsed_s=round(elapsed, 2),
+             finish_reason=choice.get("finish_reason"))
+        code = EXIT_OK if status == 200 and content else EXIT_ABORTED
     except KeyboardInterrupt:
         emit("interrupt", "ABORTED")
         code = EXIT_ABORTED
