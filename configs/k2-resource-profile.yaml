@@ -39,6 +39,18 @@ context:
     The 524288 architectural maximum is emphatically NOT a safe context on a
     24 GB machine. The earlier Metal OOM occurred during a 32,611-token prefill.
 
+# PROVISIONAL admission budget for the first bounded experiment.
+# This is an ADMISSION BUDGET, not a measured peak-memory claim, and not proof
+# that the runtime cannot exceed it. It exists so that UNKNOWN is not read as
+# zero. It must be replaced by a measurement once a load succeeds.
+provisional_startup:
+  charge_bytes: 7516192768          # 7 GiB
+  required_reserve_bytes: 4294967296  # 4 GiB
+  effective_available_requirement_bytes: 11811160064  # 11 GiB
+  status: "PROVISIONAL — not a measurement"
+  measured_runtime_overhead: null
+  measured_prefill_peak: null
+
 memory_budget:
   weights_bytes_approx: 4509715661      # ~4.2 GiB
   runtime_overhead_bytes: null          # UNKNOWN — must be measured
