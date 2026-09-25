@@ -79,7 +79,8 @@ models:
     destination: "storage/models/llm"
     download_status: "DOWNLOADED — single file, pinned revision, sha256 verified"
     verification_status: "INTEGRITY VERIFIED — local sha256 matches upstream; GGUF v3, 327 tensors, 31 metadata entries"
-    chat_template_status: "PRESENT — 43040-char embedded Jinja template with full tool-calling support. The earlier report wrongly said ABSENT; that parser had a type-handling bug."
+    chat_template_status: "PRESENT — 43040-char embedded Jinja template, self-contained. validate_tools is a MACRO defined at line 239, not an external Jinja global; the earlier blocker was wrong and is RESOLVED."
+    runtime_built_status: "BUILT — llama-server at storage/runtimes/k2-llama/build/bin/llama-server, sha256 b97b4941953a3e4186c35bc4665d1433f03ce4ec12e20d5b2b220c0935433f0d, Metal backend compiled (libggml-metal 2061704 bytes)"
     tokenizer_status: "gpt2 BPE, 250624 tokens, pre=k2-horizon, bos=0 eos=1"
     backend: "ifm-ai/llama.cpp @ 42adf019f76013dac873b5b43950d54d5ab27216 (branch model/K2Horizon)"
     approval: "APPROVED — Q6_K ONLY. Supersedes all earlier K2 proposals."
@@ -92,7 +93,7 @@ models:
       CHAT_TEMPLATE_VERIFIED: true
       TOKENIZER_VERIFIED: true
       ADAPTER_MOCK_TESTED: true
-      RUNTIME_BUILT: false
+      RUNTIME_BUILT: true
       MODEL_LOAD_VALIDATED: false
       INFERENCE_VALIDATED: false
       TOOL_CALLING_VALIDATED: false

@@ -29,10 +29,10 @@ model_geometry:
   feed_forward_length: 10240
   expert_count: 0            # dense, not MoE
   rope_freq_base: 10000000.0
-  kv_bytes_per_token: 147456 # 2 x 36 x 8 x 128 x 2
+  kv_bytes_per_token: 147456 # VERIFIED: (key 128 + value 128) x 36 layers x 8 kv_heads x 2 bytes
 
 context:
-  architectural_max: 524288   # declared in the GGUF — NOT a safe context
+  architectural_max: 524288   # declared; requires 72.0 GiB of KV cache — definitively NOT runnable
   approved_max: null          # deliberately unset; no context is approved yet
   safe_ceiling: "UNKNOWN — must be measured under the Resource Controller"
   note: >
@@ -54,7 +54,11 @@ backend:
   branch: "model/K2Horizon"
   pinned_commit: "42adf019f76013dac873b5b43950d54d5ab27216"
   build_destination: "storage/runtimes/k2-llama"
-  status: "NOT BUILT"
+  status: "BUILT"
+  binary: "storage/runtimes/k2-llama/build/bin/llama-server"
+  binary_sha256: "b97b4941953a3e4186c35bc4665d1433f03ce4ec12e20d5b2b220c0935433f0d"
+  metal_backend: "COMPILED (libggml-metal.0.22.0.dylib, 2061704 bytes, embedded metallib)"
+  jinja: "default enabled in llama-server"
 
 chat_template:
   embedded: true
@@ -62,10 +66,7 @@ chat_template:
   extracted_to: "storage/runs/k2-chat-template.jinja"
   delimiters: "<|ifm|im_start|> / <|ifm|im_end|>"
   requires_custom_jinja_global: "validate_tools"
-  blocker: >
-    The template calls validate_tools(), a custom Jinja function rather than
-    standard Jinja. A backend that does not supply it will fail on any
-    tool-calling request. Unverified.
+  blocker: "NONE — RESOLVED. validate_tools is a macro defined INSIDE the template at line 239, self-contained with no imports. No external Jinja global is required. The earlier report was wrong."
 
 safety:
   # Every control below is INHERITED UNCHANGED from the Qwen profile.
