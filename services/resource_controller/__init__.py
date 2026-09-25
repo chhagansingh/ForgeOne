@@ -38,6 +38,22 @@ from .protected import (
     RecordingForwarder,
     RequestForwarder,
 )
+from .k2_adapter import (
+    APPROVED_ARCHITECTURE,
+    APPROVED_FILENAME,
+    APPROVED_REPO,
+    APPROVED_REVISION,
+    APPROVED_SIZE,
+    AdapterError,
+    K2InferenceAdapter,
+    K2ModelIdentity,
+    K2TokenCounter,
+    MissingChatTemplate,
+    MockK2TokenCounter,
+    TokenizerMismatch,
+    require_k2_counter,
+    resolve_checkpoint_path,
+)
 from .gateway import (
     GatewayError,
     GatewayHTTPServer,

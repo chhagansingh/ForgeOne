@@ -1,0 +1,82 @@
+# ForgeOne — K2 Horizon resource profile
+#
+# SEPARATE from the Qwen profile. The Qwen cold-start estimate is deliberately
+# NOT reused: a different backend (llama.cpp, not MLX) and a different
+# checkpoint size make any reuse meaningless.
+#
+# The safe local K2 context is UNKNOWN and no peak-memory figure is invented
+# here. The values below are the *budgets to enforce*, not measurements.
+
+version: 1
+model: "IFM/K2-Horizon-3.7B-GGUF"
+revision: "a81d5fec318b47b9c7144a839f538f6b9006291c"
+filename: "K2-Horizon-4B-Q6_K.gguf"
+
+checkpoint:
+  size_bytes: 4161403264
+  sha256: "2180f3ca4eb4906a109b364a98740778fd8dcd9969e270b0d34036d18ee33232"
+  architecture: "k2-horizon"
+  format: "GGUF"
+
+# Observed from the checkpoint's own metadata (not estimated).
+model_geometry:
+  block_count: 36
+  attention_head_count: 32
+  attention_head_count_kv: 8
+  key_length: 128
+  value_length: 128
+  embedding_length: 2560
+  feed_forward_length: 10240
+  expert_count: 0            # dense, not MoE
+  rope_freq_base: 10000000.0
+  kv_bytes_per_token: 147456 # 2 x 36 x 8 x 128 x 2
+
+context:
+  architectural_max: 524288   # declared in the GGUF — NOT a safe context
+  approved_max: null          # deliberately unset; no context is approved yet
+  safe_ceiling: "UNKNOWN — must be measured under the Resource Controller"
+  note: >
+    The 524288 architectural maximum is emphatically NOT a safe context on a
+    24 GB machine. The earlier Metal OOM occurred during a 32,611-token prefill.
+
+memory_budget:
+  weights_bytes_approx: 4509715661      # ~4.2 GiB
+  runtime_overhead_bytes: null          # UNKNOWN — must be measured
+  transient_prefill_reserve_bytes: null # UNKNOWN — the term that likely caused the OOM
+  min_available_memory_bytes: 4294967296   # 4 GiB floor, unchanged
+  max_retained_cache_bytes: 536870912      # 512 MiB
+  note: >
+    runtime_overhead and transient_prefill_reserve are NULL on purpose. The
+    profile fails closed until they are measured; it does not guess.
+
+backend:
+  repository: "ifm-ai/llama.cpp"
+  branch: "model/K2Horizon"
+  pinned_commit: "42adf019f76013dac873b5b43950d54d5ab27216"
+  build_destination: "storage/runtimes/k2-llama"
+  status: "NOT BUILT"
+
+chat_template:
+  embedded: true
+  length_chars: 43040
+  extracted_to: "storage/runs/k2-chat-template.jinja"
+  delimiters: "<|ifm|im_start|> / <|ifm|im_end|>"
+  requires_custom_jinja_global: "validate_tools"
+  blocker: >
+    The template calls validate_tools(), a custom Jinja function rather than
+    standard Jinja. A backend that does not supply it will fail on any
+    tool-calling request. Unverified.
+
+safety:
+  # Every control below is INHERITED UNCHANGED from the Qwen profile.
+  # None was relaxed for K2.
+  require_fresh_telemetry: true
+  require_cold_start_admission: true
+  min_available_memory_floor: true
+  require_post_admission_reserve: true
+  require_normal_macos_pressure: true
+  require_stable_swap_and_pageouts: true
+  watchdog_before_model_load: true
+  explicit_context_and_output_budgets: true
+  owned_process_shutdown_only: true
+  allow_threshold_lowering: false
