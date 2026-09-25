@@ -40,7 +40,9 @@ Terminal.app, not an IDE terminal.
 ### Step 4 — Preflight (safe: never loads weights)
 
 ```bash
-cd "/Users/comviva/Documents/ForgeOne MY Agentic AI"
+# From the repository root (this repo is public, so the owner-local absolute
+# path is deliberately not hardcoded here):
+cd "$(git rev-parse --show-toplevel)"   # if you are already inside the repo
 ./scripts/run_k2_headless_smoke.sh --check
 ```
 
