@@ -30,6 +30,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from .outcomes import Outcome
 from .protected import ProtectedResult, ProtectedServer
+from .tokenization import TokenizerUnavailable
 
 APPROVED_REPO = "IFM/K2-Horizon-3.7B-GGUF"
 APPROVED_REVISION = "a81d5fec318b47b9c7144a839f538f6b9006291c"
@@ -144,6 +145,73 @@ class MockK2TokenCounter(K2TokenCounter):
         if tools:
             total += 8 * len(tools)
         return total
+
+
+class BackendK2TokenCounter(K2TokenCounter):
+    """Production counter: exact counts from the running K2 backend's tokenizer.
+
+    The backend is the only authority on how *this* checkpoint tokenizes.
+    Qwen's tokenizer, character estimates and hardcoded synthetic values are
+    never substituted -- if the endpoint is missing or fails, this raises
+    :class:`TokenizerUnavailable` and request admission fails closed.
+
+    Valid only once the backend is healthy. Startup admission does not use the
+    token counter, so that ordering is safe by construction.
+    """
+
+    def __init__(self, base_url: str, timeout_s: float = 30.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self._timeout = timeout_s
+        self.last_count: Optional[int] = None
+
+    @property
+    def model_family(self) -> str:
+        return "k2-horizon"
+
+    def _tokenize(self, text: str) -> int:
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        last_error = None
+        for path in ("/tokenize", "/v1/tokenize"):
+            req = urllib.request.Request(
+                self.base_url + path,
+                data=_json.dumps({"content": text}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                    got = _json.loads(resp.read().decode())
+                toks = got.get("tokens") if isinstance(got, dict) else None
+                if isinstance(toks, list) and toks:
+                    return len(toks)
+                last_error = f"{path} returned no token list"
+            except urllib.error.HTTPError as exc:
+                last_error = f"{path} HTTP {exc.code}"
+            except Exception as exc:
+                last_error = f"{path} {type(exc).__name__}: {exc}"
+        raise TokenizerUnavailable(
+            f"K2 backend exposed no usable tokenize endpoint ({last_error})"
+        )
+
+    def count_chat_tokens(self, messages, tools=None) -> int:
+        # The backend tokenizes the RENDERED prompt. Send the concatenated
+        # message content so the count reflects real K2 tokens for the text;
+        # the session additionally validates the templated prompt against the
+        # context budget before forwarding.
+        text = "\n".join(
+            str(m.get("content") or "") for m in messages if isinstance(m, dict)
+        )
+        if tools:
+            text += "\n" + str(tools)
+        n = self._tokenize(text)
+        self.last_count = n
+        return n
+
+    def count_text_tokens(self, text: str) -> int:
+        return self._tokenize(text)
 
 
 def require_k2_counter(counter: Any) -> K2TokenCounter:

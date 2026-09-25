@@ -49,9 +49,19 @@ SLOTS = 1
 BATCH = 256
 UBATCH = 128
 
+# The approved PROVISIONAL cold-start charge of 7 GiB is the TOTAL budget. It
+# is apportioned into the terms the admission maths actually uses, so the
+# preflight requirement and the startup admission agree:
+#     weights (measured) + overhead (provisional remainder) + transient
+# measured weights are the checkpoint size; the overhead term is the remainder
+# of the approved charge, NOT a measurement of llama.cpp or Metal allocation.
 PROVISIONAL_CHARGE = 7 * GB
+TRANSIENT_RESERVE = 64 * MIB                       # prefill peak remains UNKNOWN
+PROVISIONAL_OVERHEAD = PROVISIONAL_CHARGE - CHECKPOINT_SIZE - TRANSIENT_RESERVE
 REQUIRED_RESERVE = 4 * GB
 MIN_AVAILABLE = 8 * GB
+#: Effective requirement, computed from the same terms admission will use.
+EFFECTIVE_REQUIRED = CHECKPOINT_SIZE + PROVISIONAL_OVERHEAD + TRANSIENT_RESERVE + REQUIRED_RESERVE
 SUSTAINED_S = 30
 
 WD_MIN_AVAILABLE = 2 * GB
@@ -89,8 +99,14 @@ def preflight() -> dict:
     from services.resource_controller.telemetry import MacOSTelemetrySource
 
     src = MacOSTelemetrySource()
-    required = PROVISIONAL_CHARGE + REQUIRED_RESERVE
+    # Computed from the SAME terms startup admission will use, so the two
+    # cannot disagree.
+    required = EFFECTIVE_REQUIRED
     emit("preflight", "START", required_gib=round(required / GB, 2),
+         weights_gib=round(CHECKPOINT_SIZE / GB, 2),
+         provisional_overhead_gib=round(PROVISIONAL_OVERHEAD / GB, 2),
+         transient_gib=round(TRANSIENT_RESERVE / GB, 2),
+         reserve_gib=round(REQUIRED_RESERVE / GB, 2),
          sustained_s=SUSTAINED_S)
 
     vals, swaps = [], []
@@ -186,8 +202,8 @@ def execute() -> int:
     )
     from services.resource_controller.estimator import ModelMetadata
     from services.resource_controller.k2_adapter import (
-        APPROVED_ARCHITECTURE, APPROVED_REPO, APPROVED_REVISION, K2ModelIdentity,
-        MockK2TokenCounter, resolve_checkpoint_path,
+        APPROVED_ARCHITECTURE, APPROVED_REPO, APPROVED_REVISION,
+        BackendK2TokenCounter, K2ModelIdentity, resolve_checkpoint_path,
     )
     from services.resource_controller.tokenization import HuggingFaceTokenCounter
     from services.resource_controller.watchdog import JsonlTelemetryWriter
@@ -209,8 +225,8 @@ def execute() -> int:
         max_context_tokens=CTX, max_input_tokens=CTX - OUTPUT,
         reserved_output_tokens=OUTPUT,
         min_available_memory_bytes=REQUIRED_RESERVE,
-        max_retained_cache_bytes=64 * MIB,     # prompt-cache retention disabled
-        transient_reserve_bytes=PROVISIONAL_CHARGE,
+        max_retained_cache_bytes=64 * MIB,
+        transient_reserve_bytes=TRANSIENT_RESERVE,
         request_timeout_s=180.0, cooldown_after_abnormal_exit_s=60.0,
         telemetry_max_age_s=5.0,
     )
@@ -244,7 +260,7 @@ def execute() -> int:
         cache = CacheBudget(
             retained_cache_bytes=64 * MIB, max_sequences=1,
             active_kv_bytes=147456 * CTX, weights_bytes=CHECKPOINT_SIZE,
-            transient_reserve_bytes=PROVISIONAL_CHARGE,
+            transient_reserve_bytes=TRANSIENT_RESERVE,
         )
         argv = [
             str(RUNTIME_BIN), "-m", str(checkpoint),
@@ -276,8 +292,24 @@ def execute() -> int:
         emit("argv", "OK", argv=argv, validated_against="pinned --help")
 
         writer = JsonlTelemetryWriter(RUNS / "k2-headless-admission.jsonl")
+        # DEFECT A fix: real K2 metadata built from the verified GGUF geometry.
+        # Every populated field is traced to its source; the overhead term is
+        # the provisional remainder of the approved 7 GiB charge, NOT a
+        # measurement, and is labelled as such.
+        metadata = ModelMetadata(
+            num_hidden_layers=36, num_key_value_heads=8, head_dim=128,
+            weight_bytes=CHECKPOINT_SIZE,              # measured on disk
+            runtime_overhead_bytes=PROVISIONAL_OVERHEAD,  # provisional remainder
+            bytes_per_element=2,
+            source_revision=REVISION,
+        )
+        # DEFECT B fix: production uses the BACKEND tokenizer, never a mock.
+        # It fails closed until the backend is healthy, and startup admission
+        # does not use the token counter, so the ordering is safe.
+        counter = BackendK2TokenCounter(f"http://{HOST}:{BACKEND_PORT}")
+
         controller = ResourceController(
-            policy, MockK2TokenCounter(), None, MacOSTelemetrySource(),
+            policy, counter, metadata, MacOSTelemetrySource(),
             supervisor=ProcessSupervisor(SubprocessAdapter(), graceful_timeout_s=15.0),
             telemetry_writer=writer,
             watchdog_thresholds=WatchdogThresholds(

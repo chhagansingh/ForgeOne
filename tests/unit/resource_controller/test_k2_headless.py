@@ -131,3 +131,138 @@ class DocumentationTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class MetadataWiringTests(unittest.TestCase):
+    """DEFECT A regression: metadata must be real, not None."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = SESSION.read_text()
+
+    def test_production_no_longer_passes_none_metadata(self):
+        self.assertNotIn("MockK2TokenCounter(), None", self.text)
+
+    def test_production_builds_real_metadata(self):
+        self.assertIn("metadata = ModelMetadata(", self.text)
+        self.assertIn("num_hidden_layers=36", self.text)
+        self.assertIn("num_key_value_heads=8", self.text)
+        self.assertIn("head_dim=128", self.text)
+        self.assertIn("weight_bytes=CHECKPOINT_SIZE", self.text)
+
+    def test_overhead_is_labelled_provisional_not_measured(self):
+        self.assertIn("PROVISIONAL_OVERHEAD", self.text)
+        self.assertIn("NOT a measurement", self.text)
+
+    def test_charge_apportionment_sums_to_the_approved_seven_gib(self):
+        """weights + provisional overhead + transient must equal the 7 GiB charge."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("k2s", SESSION)
+        m = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(m)
+        except SystemExit:
+            pass
+        total = m.CHECKPOINT_SIZE + m.PROVISIONAL_OVERHEAD + m.TRANSIENT_RESERVE
+        self.assertEqual(total, m.PROVISIONAL_CHARGE)
+
+    def test_effective_requirement_is_eleven_gib(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("k2s", SESSION)
+        m = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(m)
+        except SystemExit:
+            pass
+        self.assertEqual(m.EFFECTIVE_REQUIRED, 11 * 1024**3)
+
+    def test_preflight_uses_the_same_terms_as_admission(self):
+        """Preflight and startup admission must not disagree."""
+        self.assertIn("required = EFFECTIVE_REQUIRED", self.text)
+
+
+class RealMetadataAdmissionTests(unittest.TestCase):
+    """The previously unreachable path: verified metadata is ACCEPTED."""
+
+    def _metadata(self):
+        from services.resource_controller.estimator import ModelMetadata
+        return ModelMetadata(
+            num_hidden_layers=36, num_key_value_heads=8, head_dim=128,
+            weight_bytes=4161403264, runtime_overhead_bytes=3288334336,
+            bytes_per_element=2, source_revision="a81d5fec" * 5,
+        )
+
+    def _controller(self, available_gb, metadata):
+        from services.resource_controller.admission import AdmissionController
+        from services.resource_controller.telemetry import SyntheticTelemetrySource
+
+        from services.resource_controller.telemetry import make_snapshot
+
+        from .support import FixedTokenCounter, make_policy
+
+        GB = 1024**3
+        policy = make_policy(
+            max_context_tokens=1024, max_input_tokens=992, reserved_output_tokens=32,
+            min_available_memory_bytes=4 * GB, transient_reserve_bytes=64 * 1024**2)
+        # free + inactive + speculative must reach `available_gb`
+        inactive = max(0.0, available_gb - 0.25 - 0.85)
+        snap = make_snapshot(total_gb=24.0, free_gb=0.25, inactive_gb=inactive,
+                             speculative_gb=0.85, swap_used_gb=2.0,
+                             pageouts=100)
+        return AdmissionController(
+            policy, FixedTokenCounter(200), metadata,
+            SyntheticTelemetrySource([snap]))
+
+    def test_real_metadata_is_accepted_not_rejected_as_unverified(self):
+        decision = self._controller(20.0, self._metadata()).admit_startup()
+        self.assertNotEqual(
+            decision.outcome.name, "REJECTED_UNVERIFIED_ESTIMATE",
+            "verified metadata must not be rejected as unverified")
+        self.assertTrue(decision.admitted, f"expected admission, got {decision.outcome}")
+
+    def test_missing_metadata_is_still_rejected(self):
+        """REJECTED_UNVERIFIED_ESTIMATE must not be weakened."""
+        decision = self._controller(20.0, None).admit_startup()
+        self.assertEqual(decision.outcome.name, "REJECTED_UNVERIFIED_ESTIMATE")
+
+    def test_insufficient_memory_blocks(self):
+        decision = self._controller(5.0, self._metadata()).admit_startup()
+        self.assertFalse(decision.admitted)
+
+
+class ProductionTokenizerWiringTests(unittest.TestCase):
+    """DEFECT B regression: no mock counter in production."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = SESSION.read_text()
+
+    def test_no_mock_counter_in_the_execute_path(self):
+        body = self.text.split("def execute()")[1]
+        self.assertNotIn("MockK2TokenCounter()", body)
+
+    def test_production_uses_the_backend_counter(self):
+        self.assertIn("BackendK2TokenCounter(", self.text)
+
+    def test_backend_counter_fails_closed_without_an_endpoint(self):
+        from services.resource_controller.k2_adapter import BackendK2TokenCounter
+        from services.resource_controller.tokenization import TokenizerUnavailable
+
+        counter = BackendK2TokenCounter("http://127.0.0.1:1", timeout_s=0.3)
+        with self.assertRaises(TokenizerUnavailable):
+            counter.count_chat_tokens([{"role": "user", "content": "hi"}])
+
+    def test_backend_counter_declares_k2_family(self):
+        from services.resource_controller.k2_adapter import BackendK2TokenCounter
+        self.assertEqual(BackendK2TokenCounter("http://x").model_family, "k2-horizon")
+
+    def test_backend_counter_passes_the_family_guard(self):
+        from services.resource_controller.k2_adapter import (
+            BackendK2TokenCounter, require_k2_counter)
+        require_k2_counter(BackendK2TokenCounter("http://x"))
+
+    def test_token_accounting_blocks_before_inference(self):
+        body = self.text.split("def execute()")[1]
+        self.assertLess(body.index("TOKEN_ACCOUNTING_BLOCKED"),
+                        body.index("chat/completions"),
+                        "token accounting must gate before the completion request")
