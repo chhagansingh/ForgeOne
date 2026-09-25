@@ -53,26 +53,48 @@ models:
       KV cache alone).
 
   # ------------------------------------------------------------- CANDIDATES
-  - id: "IFM/K2-Horizon-3.7B"
-    role: "Compact coding challenger"
-    source: "named by owner — upstream repository NOT yet confirmed"
-    revision: null
-    architecture: null
-    parameters: "3.7B (as named)"
-    format: null
-    quantization: null
-    backend: "undetermined"
-    license: "unknown"
-    disk_footprint: "unknown"
-    runtime_memory_estimate: "unknown"
+  - id: "IFM/K2-Horizon-3.7B-GGUF"
+    role: "Compact coding and agentic-model challenger"
+    source: "Hugging Face — https://huggingface.co/IFM/K2-Horizon-3.7B-GGUF"
+    revision: "a81d5fec318b47b9c7144a839f538f6b9006291c"
+    architecture: "GGUF"
+    parameters: "~4B (repository is named 3.7B; its weight files are named 4B)"
+    format: "GGUF"
+    quantization: "Q6_K"
+    filename: "K2-Horizon-4B-Q6_K.gguf"
+    backend: "llama.cpp-compatible — NOT installed, NOT verified"
+    license: "apache-2.0"
+    disk_footprint: "4161403264 bytes (4.16 GB decimal / 3.88 GiB)"
+    upstream_sha256: "2180f3ca4eb4906a109b364a98740778fd8dcd9969e270b0d34036d18ee33232"
+    runtime_memory_estimate: >
+      ~3.9 GiB of weights at Q6_K, plus KV cache. Smaller than the installed
+      Qwen3-4B in memory terms, but it needs a DIFFERENT runtime (llama.cpp),
+      which ForgeOne has not installed.
+    context:
+      declared_max: "see model card — not verified by ForgeOne"
+      safe_ceiling: "UNKNOWN — never measured on this hardware"
+    tool_calling:
+      supported: "unknown — not verified"
+      note: "tool-call format compatibility with ForgeOne is unverified"
     destination: "storage/models/llm"
-    download_status: "not downloaded"
-    verification_status: "unverified — exact repo/revision/format must be confirmed"
-    approval: "NOT approved for download"
-    notes: "No repository ID was supplied. Do not invent one."
+    download_status: "DOWNLOADED — single file, pinned revision, sha256 verified"
+    verification_status: "INTEGRITY VERIFIED — local sha256 matches upstream exactly; GGUF v3, 327 tensors, 31 metadata entries"
+    approval: "APPROVED — Q6_K ONLY. Supersedes all earlier K2 proposals."
+    states:
+      REGISTERED: true
+      DOWNLOAD_APPROVED: true
+      DOWNLOADED: true
+      INTEGRITY_VERIFIED: true
+      RUNTIME_COMPATIBLE: false
+      INFERENCE_VALIDATED: false
+    notes: >
+      The repository is named 3.7B but its files are named 4B. The exact Q6_K
+      filename is K2-Horizon-4B-Q6_K.gguf — it was resolved from the official
+      API, not guessed. Q5_K_M, Q5_0, Q8_0, Q4_K_M and BF16 are explicitly NOT
+      approved. A successful download does NOT imply runtime compatibility.
 
   - id: "IFM/K2-Horizon-0.9B-GGUF"
-    role: "Lightweight specialist"
+    role: "Lightweight specialist — SUPERSEDED by the Q6_K approval"
     source: "named by owner — upstream repository NOT yet confirmed"
     revision: null
     architecture: null
@@ -165,4 +187,5 @@ models:
 # Empty on purpose. No model is approved for download by this milestone, and
 # nothing was downloaded. The next batch must be proposed and approved
 # separately — see docs/reports/FORGE-003-storage-audit.md.
-approved_download_batch: []
+approved_download_batch:
+  - "IFM/K2-Horizon-3.7B-GGUF"   # Q6_K only, pinned revision, single file

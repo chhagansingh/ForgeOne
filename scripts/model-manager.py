@@ -183,10 +183,45 @@ def cmd_download(registry: dict, args) -> int:
     kwargs = {"repo_id": entry["id"]}
     if entry.get("revision"):
         kwargs["revision"] = entry["revision"]
-    print(f"  downloading {entry['id']} ...")
+
+    # SINGLE-FILE SELECTION. Without this, snapshot_download would fetch every
+    # quantization in the repository (~25 GB for a GGUF repo). The registry
+    # records one exact filename; anything else is refused.
+    filename = entry.get("filename")
+    if filename:
+        kwargs["allow_patterns"] = [filename]
+        print(f"  single-file selection: {filename} (allow_patterns)")
+    else:
+        print("\nBLOCKED: no `filename` recorded. Refusing to download a whole "
+              "repository — that would fetch every quantization.")
+        return EXIT_BLOCKED
+
+    print(f"  downloading {entry['id']} @ {entry.get('revision') or 'main'} ...")
     path = snapshot_download(**kwargs)  # resumable by design
     print(f"  downloaded to {path}")
-    print("  NOTE: the model is NOT loaded automatically.")
+
+    # Integrity: compare against the upstream LFS SHA-256 when recorded.
+    upstream = entry.get("upstream_sha256")
+    local_file = Path(path) / filename
+    if upstream and local_file.is_file():
+        import hashlib  # noqa: PLC0415
+
+        h = hashlib.sha256()
+        with local_file.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        got = h.hexdigest()
+        ok = got == upstream
+        print(f"  sha256 local   : {got}")
+        print(f"  sha256 upstream: {upstream}")
+        print(f"  INTEGRITY      : {'VERIFIED' if ok else 'MISMATCH'}")
+        if not ok:
+            return EXIT_FAIL
+    else:
+        print("  INTEGRITY: no upstream sha256 recorded — cannot verify")
+
+    print("  NOTE: the model is NOT loaded automatically, and a successful")
+    print("        download does NOT imply runtime compatibility.")
     return EXIT_OK
 
 
